@@ -1,10 +1,28 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import joblib
 
 # Set trang hiển thị full màn hình cho giống giao diện web thật
 st.set_page_config(page_title="Amazon Predictor", layout="wide")
 
+# ==========================================
+# TẢI MÔ HÌNH (Sử dụng cache để tối ưu)
+# ==========================================
+@st.cache_resource
+def load_model():
+    # Điền đúng tên file joblib đã lưu cùng thư mục với script này
+    return joblib.load("LG_model (1).joblib")
+
+try:
+    model = load_model()
+except Exception as e:
+    st.error(f"⚠️ Không thể tải mô hình: {e}. Vui lòng kiểm tra lại đường dẫn file 'LG_model (1).joblib'")
+    st.stop()
+
+# ==========================================
+# GIAO DIỆN CHÍNH
+# ==========================================
 # Tạo 3 Tabs như yêu cầu
 tab1, tab2, tab3 = st.tabs(["🎯 Prediction Machine", "📊 Data Exploration", "💬 Project Assistant"])
 
@@ -14,7 +32,7 @@ tab1, tab2, tab3 = st.tabs(["🎯 Prediction Machine", "📊 Data Exploration", 
 with tab1:
     # Thêm tiêu đề có màu sắc nổi bật và căn giữa
     st.markdown("<h2 style='text-align: center; color: #1E88E5;'>🎯 Phân Tích & Dự Đoán Hủy Đơn Hàng</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #666; font-size: 1.1rem;'>Dựa trên mô hình học máy (Random Forest) để dự báo khả năng khách hàng hủy đơn hàng E-commerce.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #666; font-size: 1.1rem;'>Dựa trên mô hình học máy (LightGBM) để dự báo khả năng khách hàng hủy đơn hàng E-commerce.</p>", unsafe_allow_html=True)
     st.divider()
 
     # Chia layout: Cột trái (Ảnh & Demo), Cột phải (Form điền thông số) - Có khoảng cách (col_space)
@@ -70,7 +88,7 @@ with tab1:
         # Nút bấm mở rộng (Chiếm toàn bộ chiều ngang), dùng style chuẩn 
         if st.button("🚀 Chạy Mô Hình Dự Đoán", type="primary", use_container_width=True):
             
-            # DataFrame được tạo ra từ input
+            # Trình tự các cột phải KHỚP 100% với trình tự lúc train model
             input_data = pd.DataFrame({
                 'Quantity': [quantity],
                 'Price': [price],
@@ -82,28 +100,49 @@ with tab1:
             })
             
             # Khối UI chạy loading... tạo cảm giác AI đang làm việc thật
-            with st.spinner("Đang phân tích dữ liệu qua mô hình Random Forest..."):
+            with st.spinner("Đang chạy mô hình AI để dự đoán khả năng hủy đơn..."):
                 import time
-                time.sleep(1.5) # Giả lập delay một chút cho ngầu
+                time.sleep(1.2) # Giả lập delay một chút
                 
-                # Mock kết quả trả về
-                with st.container(border=True):
-                    st.success("✅ Phân tích hoàn tất!")
-                    res_col1, res_col2 = st.columns([1, 1.5])
+                # ------ DỰ ĐOÁN THỰC TẾ TỪ MODEL ------
+                try:
+                    # Lấy xác suất của class 1 (Khả năng hủy đơn)
+                    cancel_prob = model.predict_proba(input_data)[0][1]
+                    cancel_prob_pct = cancel_prob * 100
                     
-                    with res_col1:
-                        # Dùng metric để giật tít kết quả giống Dashboard thực sự
-                        st.metric(
-                            label="Khả năng bị Hủy (Mock)", 
-                            value="18%", 
-                            delta="-5% so với TB", 
-                            delta_color="inverse"
-                        )
-                        st.caption("Mô hình dự đoán: Rủi ro thấp. Bạn có thể chốt đơn an toàn.")
+                    # Logic hiển thị theo độ rủi ro
+                    if cancel_prob > 0.5:
+                        risk_text = "Rủi ro cao. Khách hàng có khả năng hủy đơn."
+                        delta_text = "Cảnh báo cao"
+                        delta_color = "inverse" # Đỏ
+                    elif cancel_prob > 0.3:
+                        risk_text = "Rủi ro trung bình. Cần theo dõi thêm."
+                        delta_text = "Chú ý"
+                        delta_color = "off"     # Xám
+                    else:
+                        risk_text = "Rủi ro thấp. Bạn có thể chốt đơn an toàn."
+                        delta_text = "An toàn"
+                        delta_color = "normal"  # Xanh
+                    
+                    with st.container(border=True):
+                        st.success("✅ Phân tích hoàn tất!")
+                        res_col1, res_col2 = st.columns([1, 1.5])
+                        
+                        with res_col1:
+                            st.metric(
+                                label="Khả năng bị Hủy", 
+                                value=f"{cancel_prob_pct:.1f}%", 
+                                delta=delta_text, 
+                                delta_color=delta_color
+                            )
+                            st.caption(f"**Kết luận AI:** {risk_text}")
 
-                    with res_col2:
-                        st.info("Dữ liệu vector đầu vào (Vector Data):")
-                        st.dataframe(input_data, hide_index=True)
+                        with res_col2:
+                            st.info("Dữ liệu vector đầu vào (Đã đưa vào mô hình):")
+                            st.dataframe(input_data, hide_index=True)
+                            
+                except Exception as e:
+                    st.error(f"Lỗi trong quá trình dự đoán: {e}")
 
 # ----------------------------------------------------------------------
 # TAB 2: EXPLORATORY DATA ANALYSIS (EDA)
@@ -120,7 +159,7 @@ with tab2:
         with st.container(border=True):
             st.subheader("📚 Từ Điển Dữ Liệu")
             st.markdown("""
-            Dưới đây là các biến quan trọng được sử dụng trong mô hình Random Forest:
+            Dưới đây là các biến quan trọng được sử dụng trong mô hình LightGBM:
             
             - 📦 **Quantity**: Số lượng sản phẩm
             - 💸 **Price**: Giá trị giao dịch (INR)
@@ -129,10 +168,8 @@ with tab2:
             - 🚚 **Shipping_Type**: Phương thức vận chuyển
             - 🎁 **Promotion_int**: Mức độ khuyến mãi áp dụng
             - 🏭 **Fulfilment_Int**: Kênh hoàn thành đơn
-            - ⏳ **Customer tenure**: Thời gian khách hàng gắn bó *(Extra)*
-            - 💳 **Payment type**: Hình thức thanh toán *(Extra)*
             """)
-            st.info("💡 **Ghi chú:** Các biến nhãn chuỗi (Text) đều đã được chuyển đổi (One-Hot / Label Encoding) để đưa vào mô hình máy học.")
+            st.info("💡 **Ghi chú:** Các biến nhãn chuỗi (Text) đều đã được chuyển đổi để đưa vào mô hình máy học.")
 
     with eda_col2:
         with st.container(border=True):
@@ -159,61 +196,32 @@ with tab2:
 # ----------------------------------------------------------------------
 with tab3:
     st.markdown("<h2 style='text-align: center; color: #8E24AA;'>💬 Trợ Lý AI Nội Bộ</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #666; font-size: 1.1rem;'>Hỏi đáp trực tiếp với trợ lý ảo về chi tiết dự án, Random Forest, hay Data Cleaning.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #666; font-size: 1.1rem;'>Hỏi đáp trực tiếp với trợ lý ảo về chi tiết dự án, Machine Learning, hay Data Cleaning.</p>", unsafe_allow_html=True)
     st.divider()
     
-    # Chia layout để phần chat ko bị tràn viền quá rộng (giống ChatGPT)
+    # Chia layout để phần chat ko bị tràn viền quá rộng
     _, chat_col, _ = st.columns([1, 4, 1])
     
     with chat_col:
-        system_prompt = """
-        You are an AI assistant for a data science project created by a second-year Artificial Intelligence student at FPT University. 
-        The project predicts e-commerce order cancellation probabilities using a Random Forest model. 
-        The dataset features include order amount, customer tenure, discount application, shipping method, payment type, and item count.
-        
-        Your rules:
-        - Answer questions strictly related to this e-commerce data, Random Forest models, data cleaning (like One-Hot Encoding), and Exploratory Data Analysis.
-        - If a user asks about unrelated topics (e.g., coding help, general history, weather), politely decline and state that you can only answer questions about the order cancellation project.
-        - Keep answers concise, professional, and educational.
-        - For now the content of the project is empty, so you can only tell them to wait for more information to be added.
-        """
+        st.info("🤖 **Gợi ý câu hỏi:** *'Mô hình hoạt động như thế nào?'* hoặc *'Data Dictionary của dữ liệu này gồm gì?'*")
 
-        # Thêm một info box hướng dẫn nhanh
-        st.info("🤖 **Gợi ý câu hỏi:** *'Random Forest hoạt động như thế nào?'* hoặc *'Data Dictionary của dữ liệu này gồm gì?'*")
-
-        # Container bao ngoài vùng tin nhắn để tạo khung viền đẹp
-        with st.container(border=True, height=450): # Giới hạn chiều cao có croll
-            # Khởi tạo history cho chat trong session state
+        with st.container(border=True, height=450):
             if "messages" not in st.session_state:
                 st.session_state.messages = []
-                st.session_state.messages.append({"role": "assistant", "content": "👋 Xin chào! Tôi là AI Assistant của dự án (sinh viên AI năm 2 ĐH FPT). Tôi có thể giúp gì cho bạn về Random Forest, Data Cleaning, hoặc mô hình phân tích hủy đơn hàng?"})
+                st.session_state.messages.append({"role": "assistant", "content": "👋 Xin chào! Tôi là AI Assistant của dự án (sinh viên AI năm 2 ĐH FPT). Tôi có thể giúp gì cho bạn về mô hình phân tích hủy đơn hàng?"})
 
-            # Hiển thị các tin nhắn trước đó
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
-        # Input nằm ngay dưới container viền chat
         if prompt := st.chat_input("Gõ câu hỏi của bạn tại đây..."):
-            
-            # Thêm tin nhắn user vào lịch sử
             st.session_state.messages.append({"role": "user", "content": prompt})
-            
-            # Hàm refresh mini để hiển thị ngay text bạn vừa gõ (Workaround mượt trên form streamlit)
             st.rerun()
 
-        # Xử lý Logic AI (Nếu tin nhắn cuối cùng là của User -> AI cần trả lời)
         if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] == "user":
-            with chat_col: # Vẫn render ngoài container chat viền để dùng chat_message mới sinh ra
-                # Phải render lại tin nhắn user vừa gõ (do rerun đã reset UI nhưng ko render logic lặp bên trên nữa với tin nhắn mới nhất nếu k viết khéo, nhưng vì ta dùng rerun nên logic lặp ở vòng lặp for trên kia SẼ LÀM RỒI)
-                # Tuy nhiên form input mới nằm bên ngoài vòng for -> đoạn logic genbot này cần ở ngoài
-                pass
-            
-            # Giả lập suy nghĩ của bot (Bot typing...)
             with st.spinner("Đang suy luận..."):
                 import time
                 time.sleep(1)
-                mock_response = "For now the content of the project is empty, so please wait for more information to be added. *(Please integrate with an LLM API to enable full capabilities)*"
-                
+                mock_response = "Giao diện Chatbot hiện chưa được tích hợp LLM. Vui lòng kết nối API (như OpenAI) để trợ lý này có thể trò chuyện thật."
                 st.session_state.messages.append({"role": "assistant", "content": mock_response})
                 st.rerun()
