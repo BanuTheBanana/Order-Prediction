@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import lightgbm as lgb
 
 # Set trang hiển thị full màn hình cho giống giao diện web thật
 st.set_page_config(page_title="Amazon Predictor", layout="wide")
