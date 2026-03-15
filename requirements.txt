@@ -3,3 +3,4 @@ streamlit==1.53.1
 pandas==2.3.3
 numpy==2.4.1
 lightgbm==4.6.0
+scikit-learn==1.6.1
