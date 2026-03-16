@@ -1,3 +1,3 @@
 @echo off
-python "%~dp0app.py"
+streamlit run "%~dp0app.py"
 pause
