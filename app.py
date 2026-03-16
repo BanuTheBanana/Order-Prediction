@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import joblib
 import lightgbm as lgb
-
 # Set trang hiển thị full màn hình cho giống giao diện web thật
 st.set_page_config(page_title="Amazon Predictor", layout="wide")
 
@@ -13,12 +12,11 @@ st.set_page_config(page_title="Amazon Predictor", layout="wide")
 @st.cache_resource
 def load_model():
     # Điền đúng tên file joblib đã lưu cùng thư mục với script này
-    return joblib.load("LG_model (1).joblib")
-
+    return joblib.load("LG_model.joblib")
 try:
     model = load_model()
 except Exception as e:
-    st.error(f"⚠️ Không thể tải mô hình: {e}. Vui lòng kiểm tra lại đường dẫn file 'LG_model (1).joblib'")
+    st.error(f"⚠️ Không thể tải mô hình: {e}. Vui lòng kiểm tra lại đường dẫn file 'LG_model.joblib'")
     st.stop()
 
 # ==========================================
@@ -61,7 +59,7 @@ with tab1:
             # Dùng 2 cột ngang cho Price và Quantity để tiết kiệm diện tích và nhìn đối xứng
             c1, c2 = st.columns(2)
             with c1:
-                price = st.number_input("💸 Giá trị đơn hàng (INR)", min_value=0.0, value=49133.0, step=100.0, format="%.2f")
+                amount = st.number_input("💸 Giá trị đơn hàng (INR)", min_value=0.0, value=49133.0, step=100.0, format="%.2f")
             with c2:
                 quantity = st.number_input("📦 Số lượng sản phẩm", min_value=1, value=1, step=1)
             
@@ -72,17 +70,16 @@ with tab1:
             f_col1, f_col2 = st.columns(2)
             
             with f_col1:
-                is_business = st.selectbox(
+                B2B_binary = st.selectbox(
                     "🏢 Khách doanh nghiệp?", 
                     options=[0, 1], 
                     format_func=lambda x: "Có (1)" if x == 1 else "Không (0)"
                 )
-                shipping_type = st.selectbox("🚚 Hình thức vận chuyển", options=[0, 1])
-                fulfilment_int = st.selectbox("🏭 Kênh hoàn thành", options=[0, 1])
+                fulfillment_binary = st.selectbox("🏭 Kênh hoàn thành", options=[0, 1])
 
             with f_col2:
-                size = st.selectbox("📏 Kích cỡ (Size)", options=[0, 1, 2, 3, 4, 5])
-                promotion_int = st.selectbox("🎁 Mức ưu đãi áp dụng", options=[0, 1, 2, 3])
+                size_ordinal = st.selectbox("📏 Kích cỡ (Size)", options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+                promotion = st.selectbox("🎁 Có ưu đãi áp dụng", options=[0, 1])
 
             st.write("") # Tạo một chút khoảng trống thả lỏng không gian
 
@@ -90,16 +87,15 @@ with tab1:
         if st.button("🚀 Chạy Mô Hình Dự Đoán", type="primary", use_container_width=True):
             
             # Trình tự các cột phải KHỚP 100% với trình tự lúc train model
+            # Sắp xếp lại trình tự đặc trưng theo yêu cầu
             input_data = pd.DataFrame({
-                'Quantity': [quantity],
-                'Price': [price],
-                'Is_Business': [is_business],
-                'Size': [size],
-                'Shipping_Type': [shipping_type],
-                'Promotion_int': [promotion_int],
-                'Fulfilment_Int': [fulfilment_int]
-            })
-            
+                'Qty': [quantity],
+                'Amount': [amount],
+                'fulfillment_binary': [fulfillment_binary],
+                'promotion': [promotion],
+                'size_ordinal': [size_ordinal],
+                'B2B_binary': [B2B_binary]
+            })            
             # Khối UI chạy loading... tạo cảm giác AI đang làm việc thật
             with st.spinner("Đang chạy mô hình AI để dự đoán khả năng hủy đơn..."):
                 import time
