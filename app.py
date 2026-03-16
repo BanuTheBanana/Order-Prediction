@@ -85,18 +85,42 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                 B2B_binary = st.selectbox(
                     "🏢 Khách doanh nghiệp?",
                     options=[0, 1],
-                    format_func=lambda x: "Có (1)" if x == 1 else "Không (0)",
+                    format_func=lambda x: "Có" if x == 1 else "Không",
                     key=f"{widget_prefix}_b2b",
                 )
-                fulfillment_binary = st.selectbox("🏭 Kênh hoàn thành", options=[0, 1], key=f"{widget_prefix}_fulfill")
+                fulfillment_binary = st.selectbox(
+                    "🏭 Gói dịch vụ",
+                    options=[0, 1],
+                    format_func=lambda x: "Premium" if x == 1 else "Thường",
+                    key=f"{widget_prefix}_fulfill",
+                )
 
             with f_col2:
+                size_labels = [
+                    "Free",
+                    "XS",
+                    "S",
+                    "M",
+                    "L",
+                    "XL",
+                    "2XL",
+                    "3XL",
+                    "4XL",
+                    "5XL",
+                    "6XL",
+                ]
                 size_ordinal = st.selectbox(
                     "📏 Kích cỡ (Size)",
-                    options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                    options=list(range(len(size_labels))),
+                    format_func=lambda x: size_labels[int(x)],
                     key=f"{widget_prefix}_size",
                 )
-                promotion = st.selectbox("🎁 Có ưu đãi áp dụng", options=[0, 1], key=f"{widget_prefix}_promo")
+                promotion = st.selectbox(
+                    "🎁 Ưu đãi",
+                    options=[0, 1],
+                    format_func=lambda x: "Có" if x == 1 else "Không",
+                    key=f"{widget_prefix}_promo",
+                )
 
         if st.button("🚀 Chạy Mô Hình Dự Đoán", type="primary", use_container_width=True, key=f"{widget_prefix}_run"):
             input_data = pd.DataFrame(
@@ -132,7 +156,7 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                         delta_color = "normal"
 
                     with st.container(border=True):
-                        st.success("✅ Phân tích hoàn tất!")
+                        st.info("✅ Phân tích hoàn tất!")
                         res_col1, res_col2 = st.columns([1, 1.5])
 
                         with res_col1:
@@ -142,10 +166,15 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                                 delta=delta_text,
                                 delta_color=delta_color,
                             )
-                            st.caption(f"**Kết luận AI:** {risk_text}")
+                            if success_prob < 0.5:
+                                st.error(f"**Kết luận AI:** {risk_text}")
+                            elif success_prob < 0.7:
+                                st.warning(f"**Kết luận AI:** {risk_text}")
+                            else:
+                                st.success(f"**Kết luận AI:** {risk_text}")
 
                         with res_col2:
-                            st.info("Dữ liệu vector đầu vào (Đã đưa vào mô hình):")
+                            st.markdown("**Dữ liệu vector đầu vào (Đã đưa vào mô hình):**")
                             st.dataframe(input_data, hide_index=True)
                 except Exception as e:
                     st.error(f"Lỗi trong quá trình dự đoán: {e}")
@@ -279,199 +308,131 @@ elif active_page == "🛍️ Browser Sản Phẩm":
         key="browser_subtab",
     )
 
-    # Thanh bộ lọc bên trái + khu vực hiển thị danh sách sản phẩm bên phải
-    left_col, right_col = st.columns([0.9, 2.1])
+    selected_clothing_type = "Tất cả quần áo"
 
-    # ------------------- CỘT TRÁI: THANH LỌC SẢN PHẨM -------------------
-    with left_col:
-        with st.container(border=True):
-            st.markdown("#### 🔍 Bộ lọc sản phẩm")
+    # ------------------- KHU VỰC KẾT QUẢ / DỰ ĐOÁN -------------------
+    selected_product = st.session_state.get("selected_product")
 
-            # Nhóm: Loại trang phục
-            st.markdown("**Loại quần áo**")
-            clothing_types = [
-                "Tất cả quần áo",
-                "Áo thun",
-                "Áo sơ mi",
-                "Áo khoác / Hoodie",
-                "Quần dài",
-                "Quần short",
-                "Đầm / Váy",
-            ]
-            selected_clothing_type = st.radio(
-                "",
-                clothing_types,
-                index=0,
-            )
-
-            st.markdown("---")
-
-            # Nhóm: Giới tính
-            st.markdown("**Dành cho**")
-            target_segment = st.checkbox("Nam", value=True)
-            target_segment_female = st.checkbox("Nữ", value=True)
-            target_segment_kid = st.checkbox("Trẻ em", value=False)
-
-            st.markdown("---")
-
-            # Nhóm: Kích cỡ (demo nhanh)
-            st.markdown("**Kích cỡ phổ biến**")
-            size_cols = st.columns(3)
-            sizes = ["S", "M", "L", "XL"]
-            size_selected = {}
-            for i, size in enumerate(sizes):
-                with size_cols[i % 3]:
-                    size_selected[size] = st.checkbox(size, value=(size in ["M", "L"]))
-
-            st.markdown("---")
-
-            # Nhóm: Khoảng giá
-            st.markdown("**Khoảng giá (INR)**")
-            price_min, price_max = st.slider(
-                "Chọn khoảng giá",
-                min_value=100,
-                max_value=10000,
-                value=(0, 1000),
-                step=10,
-            )
-
-            st.button("Áp dụng bộ lọc", use_container_width=True, type="primary")
-
-    # ------------------- CỘT PHẢI: KHU VỰC KẾT QUẢ / DỰ ĐOÁN -------------------
-    with right_col:
-        selected_product = st.session_state.get("selected_product")
-
-        if browser_subtab == "🎯 Dự đoán sản phẩm":
-            if not selected_product:
-                st.warning("Bạn chưa chọn sản phẩm. Hãy quay lại tab 🛒 Duyệt sản phẩm và bấm “Xem dự đoán”.")
-            else:
-                nav1, nav2, _ = st.columns([1, 1, 2])
-                with nav1:
-                    if st.button("← Quay lại duyệt", use_container_width=True, key="back_to_browse"):
-                        st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
-                        st.rerun()
-                with nav2:
-                    if st.button("Hủy chọn sản phẩm", use_container_width=True, key="cancel_product"):
-                        st.session_state.pop("selected_product", None)
-                        st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
-                        st.rerun()
-
-                with st.container(border=True):
-                    st.markdown("#### ✅ Sản phẩm đã chọn")
-                    p = selected_product
-                    pcol1, pcol2 = st.columns([1, 1.6])
-                    with pcol1:
-                        st.image(p["image_url"], use_container_width=True)
-                    with pcol2:
-                        st.markdown(f"**{p['name']}**")
-                        st.caption(p["subtitle"])
-                        st.markdown(
-                            f"<span style='color:#B12704; font-weight:700; font-size: 1.05rem;'>₹ {p['price_inr']:,} INR</span>",
-                            unsafe_allow_html=True,
-                        )
-                        st.caption(p["delivery_text"])
-
-                st.write("")
-                run_prediction_ui(
-                    amount=float(selected_product["price_inr"]),
-                    locked_amount=True,
-                    widget_prefix=f"product_{selected_product['id']}",
-                )
-            # Dừng ở đây để không render danh sách sản phẩm bên dưới
-            st.stop()
-
-        # Thanh tìm kiếm + sort
-        with st.container(border=True):
-            top_row = st.columns([2.2, 1, 1])
-            with top_row[0]:
-                search_query = st.text_input(
-                    "Tìm kiếm quần áo",
-                    placeholder="Ví dụ: áo hoodie đen, áo thun oversize...",
-                )
-            with top_row[1]:
-                sort_by = st.selectbox(
-                    "Sắp xếp theo",
-                    ["Phù hợp nhất", "Giá tăng dần", "Giá giảm dần", "Đánh giá cao nhất", "Mới nhất"],
-                )
-            with top_row[2]:
-                st.selectbox(
-                    "Hiển thị",
-                    ["24 sản phẩm / trang", "48 sản phẩm / trang", "96 sản phẩm / trang"],
-                    index=0,
-                )
-
-        st.write("")
-
-        # Thanh breadcrumb mô phỏng giống Amazon
-        st.markdown(
-            """
-            <div style="font-size: 0.9rem; color: #777; margin-bottom: 0.5rem;">
-                Amazon.in &gt; Thời trang &gt; Quần áo &gt; <b>""" + selected_clothing_type + """</b>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    # Thanh tìm kiếm (giữ lại, bỏ bộ lọc khác)
+    with st.container(border=True):
+        search_query = st.text_input(
+            "Tìm kiếm quần áo",
+            placeholder="Ví dụ: hoodie đen, áo thun oversize...",
         )
 
-        products_demo = [
-            {
-                "id": "tee_white_499",
-                "name": "Áo thun nam basic cổ tròn",
-                "subtitle": "Trắng / Cotton 100%",
-                "price_inr": 499,
-                "delivery_text": "Dự kiến giao: 3–5 ngày làm việc.",
-                "image_url": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=400&q=80",
-            },
-            {
-                "id": "hoodie_black_1299",
-                "name": "Hoodie oversize unisex nỉ dày",
-                "subtitle": "Đen / Form rộng",
-                "price_inr": 1299,
-                "delivery_text": "Dự kiến giao: 4–6 ngày làm việc.",
-                "image_url": "https://images.unsplash.com/photo-1529927066849-66e1abc70a2e?auto=format&fit=crop&w=400&q=80",
-            },
-            {
-                "id": "shirt_navy_899",
-                "name": "Áo sơ mi tay dài slim fit",
-                "subtitle": "Xanh navy",
-                "price_inr": 899,
-                "delivery_text": "Dự kiến giao: 2–4 ngày làm việc.",
-                "image_url": "https://images.unsplash.com/photo-1528701800489-20be3c30c1d5?auto=format&fit=crop&w=400&q=80",
-            },
-            {
-                "id": "jeans_2500",
-                "name": "Quần jean nam dáng slim",
-                "subtitle": "Xanh đậm / Co giãn nhẹ",
-                "price_inr": 2500,
-                "delivery_text": "Dự kiến giao: 3–5 ngày làm việc.",
-                "image_url": "https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=400&q=80",
-            },
-            {
-                "id": "tee_pink_749",
-                "name": "Áo thun nữ oversize graphic",
-                "subtitle": "Hồng pastel",
-                "price_inr": 749,
-                "delivery_text": "Dự kiến giao: 5–7 ngày làm việc.",
-                "image_url": "https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=400&q=80",
-            },
-        ]
+    st.write("")
 
-        cols = st.columns(3)
-        for idx, p in enumerate(products_demo):
-            with cols[idx % 3]:
-                with st.container(border=True):
+    # Nếu đang ở subtab dự đoán thì render khu vực dự đoán và dừng
+    if browser_subtab == "🎯 Dự đoán sản phẩm":
+        if not selected_product:
+            st.warning("Bạn chưa chọn sản phẩm. Hãy quay lại tab 🛒 Duyệt sản phẩm và bấm “Xem dự đoán”.")
+        else:
+            nav1, nav2, _ = st.columns([1, 1, 2])
+            with nav1:
+                if st.button("← Quay lại duyệt", use_container_width=True, key="back_to_browse"):
+                    st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
+                    st.rerun()
+            with nav2:
+                if st.button("Hủy chọn sản phẩm", use_container_width=True, key="cancel_product"):
+                    st.session_state.pop("selected_product", None)
+                    st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
+                    st.rerun()
+
+            with st.container(border=True):
+                st.markdown("#### ✅ Sản phẩm đã chọn")
+                p = selected_product
+                pcol1, pcol2 = st.columns([1, 1.6])
+                with pcol1:
                     st.image(p["image_url"], use_container_width=True)
+                with pcol2:
                     st.markdown(f"**{p['name']}**")
                     st.caption(p["subtitle"])
                     st.markdown(
-                        f"<span style='color:#B12704; font-weight:700;'>₹ {p['price_inr']:,} INR</span>",
+                        f"<span style='color:#B12704; font-weight:700; font-size: 1.05rem;'>₹ {p['price_inr']:,} INR</span>",
                         unsafe_allow_html=True,
                     )
                     st.caption(p["delivery_text"])
 
-                    if st.button("Xem dự đoán", key=f"predict_{p['id']}", use_container_width=True):
-                        st.session_state["selected_product"] = p
-                        st.session_state["nav_to_page"] = "🛍️ Browser Sản Phẩm"
-                        st.session_state["nav_to_subtab"] = "🎯 Dự đoán sản phẩm"
-                        st.rerun()
+            st.write("")
+            run_prediction_ui(
+                amount=float(selected_product["price_inr"]),
+                locked_amount=True,
+                widget_prefix=f"product_{selected_product['id']}",
+            )
 
-        st.caption("Bấm “Xem dự đoán” để tự chuyển sang tab 🎯 Dự đoán sản phẩm.")
+        # Dừng ở đây để không render danh sách sản phẩm bên dưới
+        st.stop()
+
+    # Thanh breadcrumb mô phỏng giống Amazon (chỉ hiện ở subtab duyệt)
+    st.markdown(
+        """
+        <div style="font-size: 0.9rem; color: #777; margin-bottom: 0.5rem;">
+            Amazon.in &gt; Thời trang &gt; Quần áo &gt; <b>""" + selected_clothing_type + """</b>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    products_demo = [
+        {
+            "id": "tee_white_499",
+            "name": "Áo thun nam basic cổ tròn",
+            "subtitle": "Trắng / Cotton 100%",
+            "price_inr": 499,
+            "delivery_text": "Dự kiến giao: 3–5 ngày làm việc.",
+            "image_url": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=400&q=80",
+        },
+        {
+            "id": "hoodie_black_1299",
+            "name": "Hoodie oversize unisex nỉ dày",
+            "subtitle": "Đen / Form rộng",
+            "price_inr": 1299,
+            "delivery_text": "Dự kiến giao: 4–6 ngày làm việc.",
+            "image_url": "https://images.unsplash.com/photo-1529927066849-66e1abc70a2e?auto=format&fit=crop&w=400&q=80",
+        },
+        {
+            "id": "shirt_navy_899",
+            "name": "Áo sơ mi tay dài slim fit",
+            "subtitle": "Xanh navy",
+            "price_inr": 899,
+            "delivery_text": "Dự kiến giao: 2–4 ngày làm việc.",
+            "image_url": "https://images.unsplash.com/photo-1528701800489-20be3c30c1d5?auto=format&fit=crop&w=400&q=80",
+        },
+        {
+            "id": "jeans_2500",
+            "name": "Quần jean nam dáng slim",
+            "subtitle": "Xanh đậm / Co giãn nhẹ",
+            "price_inr": 2500,
+            "delivery_text": "Dự kiến giao: 3–5 ngày làm việc.",
+            "image_url": "https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=400&q=80",
+        },
+        {
+            "id": "tee_pink_749",
+            "name": "Áo thun nữ oversize graphic",
+            "subtitle": "Hồng pastel",
+            "price_inr": 749,
+            "delivery_text": "Dự kiến giao: 5–7 ngày làm việc.",
+            "image_url": "https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=400&q=80",
+        },
+    ]
+
+    cols = st.columns(3)
+    for idx, p in enumerate(products_demo):
+        with cols[idx % 3]:
+            with st.container(border=True):
+                st.image(p["image_url"], use_container_width=True)
+                st.markdown(f"**{p['name']}**")
+                st.caption(p["subtitle"])
+                st.markdown(
+                    f"<span style='color:#B12704; font-weight:700;'>₹ {p['price_inr']:,} INR</span>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(p["delivery_text"])
+
+                if st.button("Xem dự đoán", key=f"predict_{p['id']}", use_container_width=True):
+                    st.session_state["selected_product"] = p
+                    st.session_state["nav_to_page"] = "🛍️ Browser Sản Phẩm"
+                    st.session_state["nav_to_subtab"] = "🎯 Dự đoán sản phẩm"
+                    st.rerun()
+
+    st.caption("Bấm “Xem dự đoán” để tự chuyển sang tab 🎯 Dự đoán sản phẩm.")
