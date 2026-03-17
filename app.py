@@ -3,6 +3,11 @@ import pandas as pd
 import numpy as np
 import joblib
 import lightgbm as lgb
+import os
+from pathlib import Path
+import matplotlib.pyplot as plt
+from datetime import datetime
+from sqlalchemy import create_engine
 # Set trang hiển thị full màn hình cho giống giao diện web thật
 st.set_page_config(page_title="Amazon Predictor", layout="wide")
 
@@ -12,12 +17,127 @@ st.set_page_config(page_title="Amazon Predictor", layout="wide")
 @st.cache_resource
 def load_model():
     # Điền đúng tên file joblib đã lưu cùng thư mục với script này
-    return joblib.load("LG_model.joblib")
+    return joblib.load("model/LG_model.joblib")
 try:
     model = load_model()
 except Exception as e:
     st.error(f"⚠️ Không thể tải mô hình: {e}. Vui lòng kiểm tra lại đường dẫn file 'LG_model.joblib'")
     st.stop()
+
+# ==========================================
+# DỮ LIỆU EDA (CSV) - Tự refresh theo mtime
+# ==========================================
+DATA_CSV_PATH = Path("data") / "ecommerce_orders.csv"
+
+DATABASE_URI = os.environ.get(
+    "DATABASE_URI",
+    "postgresql://neondb_owner:npg_Oj2irQBMP0Xw@ep-restless-mouse-a1l98lhe-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+)
+
+
+@st.cache_resource(show_spinner=False)
+def get_db_engine(uri: str):
+    try:
+        return create_engine(uri, pool_pre_ping=True)
+    except ModuleNotFoundError as e:
+        # Thường gặp: thiếu psycopg2/psycopg driver
+        raise e
+
+
+@st.cache_data(show_spinner=False)
+def load_orders_db(uri: str, refresh_token: int) -> pd.DataFrame:
+    engine = get_db_engine(uri)
+    df = pd.read_sql_table("ecommerce_orders", con=engine)
+    if "Unnamed: 22" in df.columns:
+        df = df.drop(columns=["Unnamed: 22"])
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_orders_csv(csv_path: str, mtime: float) -> pd.DataFrame:
+    # mtime được truyền vào để cache tự invalidate khi file thay đổi
+    df = pd.read_csv(csv_path)
+    if "Unnamed: 22" in df.columns:
+        df = df.drop(columns=["Unnamed: 22"])
+    return df
+
+
+def _to_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    s = str(v).strip().lower()
+    return s in {"1", "true", "yes", "y", "t"}
+
+
+def _size_to_ordinal(size_val) -> float:
+    if size_val is None:
+        return np.nan
+    s = str(size_val).strip().upper().replace(" ", "")
+    mapping = {
+        "FREE": 0,
+        "XS": 1,
+        "S": 2,
+        "M": 3,
+        "L": 4,
+        "XL": 5,
+        "2XL": 6,
+        "XXL": 6,
+        "3XL": 7,
+        "4XL": 8,
+        "5XL": 9,
+        "6XL": 10,
+    }
+    return mapping.get(s, np.nan)
+
+
+def _safe_text(v) -> str:
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except Exception:
+        pass
+    return str(v)
+
+
+def apply_auto_features(row: dict, df_columns: list[str]) -> dict:
+    """Tự đồng bộ các cột feature khi lưu."""
+    status = str(row.get("Status", "")).strip().lower()
+    if "Status_binary" in df_columns:
+        bad_markers = ("cancelled", "rejected", "returned", "return")
+        row["Status_binary"] = 0 if any(m in status for m in bad_markers) else 1
+
+    if "size_ordinal" in df_columns:
+        row["size_ordinal"] = _size_to_ordinal(row.get("Size"))
+
+    if "B2B_binary" in df_columns:
+        row["B2B_binary"] = 1 if _to_bool(row.get("B2B")) else 0
+
+    # ship-service-level tự cập nhật theo fulfilled-by (Easy Ship -> Standard, None -> Expedited)
+    if "ship-service-level" in df_columns and "fulfilled-by" in df_columns:
+        fb = str(row.get("fulfilled-by", "")).strip().lower()
+        row["ship-service-level"] = "Standard" if fb == "easy ship" else "Expedited"
+
+    if "fulfillment_binary" in df_columns:
+        # Ưu tiên dùng fulfilled-by: Easy Ship = thường (0), rỗng/None = premium (1)
+        if "fulfilled-by" in df_columns:
+            fb = str(row.get("fulfilled-by", "")).strip().lower()
+            row["fulfillment_binary"] = 0 if fb == "easy ship" else 1
+        else:
+            lvl = str(row.get("ship-service-level", "")).strip().lower()
+            row["fulfillment_binary"] = 0 if lvl in {"", "standard"} else 1
+
+    # ship_premium không chỉnh tay, đồng bộ theo fulfillment_binary (2 cái là 1)
+    if "ship_premium" in df_columns and "fulfillment_binary" in df_columns:
+        row["ship_premium"] = int(row.get("fulfillment_binary") or 0)
+
+    return row
+
+
+SIZE_ORDER = ["Free", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL", "6XL"]
 
 # ==========================================
 # GIAO DIỆN CHÍNH
@@ -85,18 +205,42 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                 B2B_binary = st.selectbox(
                     "🏢 Khách doanh nghiệp?",
                     options=[0, 1],
-                    format_func=lambda x: "Có (1)" if x == 1 else "Không (0)",
+                    format_func=lambda x: "Có" if x == 1 else "Không",
                     key=f"{widget_prefix}_b2b",
                 )
-                fulfillment_binary = st.selectbox("🏭 Kênh hoàn thành", options=[0, 1], key=f"{widget_prefix}_fulfill")
+                fulfillment_binary = st.selectbox(
+                    "🏭 Gói dịch vụ",
+                    options=[0, 1],
+                    format_func=lambda x: "Premium" if x == 1 else "Thường",
+                    key=f"{widget_prefix}_fulfill",
+                )
 
             with f_col2:
+                size_labels = [
+                    "Free",
+                    "XS",
+                    "S",
+                    "M",
+                    "L",
+                    "XL",
+                    "2XL",
+                    "3XL",
+                    "4XL",
+                    "5XL",
+                    "6XL",
+                ]
                 size_ordinal = st.selectbox(
                     "📏 Kích cỡ (Size)",
-                    options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                    options=list(range(len(size_labels))),
+                    format_func=lambda x: size_labels[int(x)],
                     key=f"{widget_prefix}_size",
                 )
-                promotion = st.selectbox("🎁 Có ưu đãi áp dụng", options=[0, 1], key=f"{widget_prefix}_promo")
+                promotion = st.selectbox(
+                    "🎁 Ưu đãi",
+                    options=[0, 1],
+                    format_func=lambda x: "Có" if x == 1 else "Không",
+                    key=f"{widget_prefix}_promo",
+                )
 
         if st.button("🚀 Chạy Mô Hình Dự Đoán", type="primary", use_container_width=True, key=f"{widget_prefix}_run"):
             input_data = pd.DataFrame(
@@ -132,7 +276,7 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                         delta_color = "normal"
 
                     with st.container(border=True):
-                        st.success("✅ Phân tích hoàn tất!")
+                        st.info("✅ Phân tích hoàn tất!")
                         res_col1, res_col2 = st.columns([1, 1.5])
 
                         with res_col1:
@@ -142,10 +286,15 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                                 delta=delta_text,
                                 delta_color=delta_color,
                             )
-                            st.caption(f"**Kết luận AI:** {risk_text}")
+                            if success_prob < 0.5:
+                                st.error(f"**Kết luận AI:** {risk_text}")
+                            elif success_prob < 0.7:
+                                st.warning(f"**Kết luận AI:** {risk_text}")
+                            else:
+                                st.success(f"**Kết luận AI:** {risk_text}")
 
                         with res_col2:
-                            st.info("Dữ liệu vector đầu vào (Đã đưa vào mô hình):")
+                            st.markdown("**Dữ liệu vector đầu vào (Đã đưa vào mô hình):**")
                             st.dataframe(input_data, hide_index=True)
                 except Exception as e:
                     st.error(f"Lỗi trong quá trình dự đoán: {e}")
@@ -168,53 +317,574 @@ if active_page == "🧪 Playground":
         unsafe_allow_html=True,
     )
     st.divider()
-    run_prediction_ui(amount=49133.0, locked_amount=False, widget_prefix="playground")
+    run_prediction_ui(amount=100.0, locked_amount=False, widget_prefix="playground")
 
 # ----------------------------------------------------------------------
 # TAB 2: EXPLORATORY DATA ANALYSIS (EDA)
 # ----------------------------------------------------------------------
 elif active_page == "📊 Data Exploration":
     st.markdown("<h2 style='text-align: center; color: #4CAF50;'>📊 Khám Phá Dữ Liệu (EDA)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #666; font-size: 1.1rem;'>Hiểu rõ các đặc trưng (features) ảnh hưởng thế nào đến quyết định hủy đơn hàng.</p>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='text-align: center; color: #666; font-size: 1.05rem;'>"
+        "Đọc dữ liệu và phân tích dữ liệu."
+        "</p>",
+        unsafe_allow_html=True,
+    )
     st.divider()
-    
-    # Chia bố cục: Cột trái (Giải thích Features), Cột phải (Mock Chart)
-    eda_col1, eda_col_space, eda_col2 = st.columns([1, 0.1, 1.5])
-    
-    with eda_col1:
-        with st.container(border=True):
-            st.subheader("📚 Từ Điển Dữ Liệu")
-            st.markdown("""
-            Dưới đây là các biến (feature) quan trọng trong mô hình LightGBM:
 
-            - 📦 **Qty**: Số lượng sản phẩm đặt mua
-            - 💸 **Amount**: Giá trị đơn hàng (INR)
-            - 🏢 **B2B**: Khách hàng doanh nghiệp (1 = Có, 0 = Không)
-            - 📏 **Size_Int**: Mã hóa kích cỡ sản phẩm (0: Nhỏ nhất, lớn dần đến 10)
-            - 🚚 **Service_Level_Int**: Mã hóa loại dịch vụ giao hàng (0, 1, 2)
-            - 🎁 **Promotion_Count**: Số lượng khuyến mãi được áp dụng
-            """)
-            st.info("💡 **Ghi chú:** Các biến nhãn chuỗi (Text) đều đã được chuyển đổi để đưa vào mô hình máy học.")
+    if "orders_refresh_token" not in st.session_state:
+        st.session_state.orders_refresh_token = 0
 
-    with eda_col2:
-        with st.container(border=True):
-            st.subheader("📈 Phân tích tương quan (Mock Data)")
-            
-            # Hiển thị 3 metrics tổng quan ảo
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Tỉ lệ hủy đơn TB", "12.4%", "-2.1% (tháng này)", delta_color="inverse")
-            m2.metric("Đơn KH Doanh nghiệp", "45%", "+5% (tháng này)")
-            m3.metric("Áp dụng Khuyến mãi", "68%", "Ổn định", delta_color="off")
-            
-            st.write("")
-            st.markdown("##### 📉 Biểu đồ phân phối giá trị theo tỉ lệ hủy (Minh họa)")
-            # Vẽ một cái Bar Chart bằng st.bar_chart với data random ảo
-            chart_data = pd.DataFrame(
-                np.random.randint(10, 100, size=(6, 2)),
-                columns=["Không hủy", "Hủy đơn"],
-                index=["Size 0", "Size 1", "Size 2", "Size 3", "Size 4", "Size 5"]
+    # Các nút thao tác EDA (khởi tạo trước, render sau khi có df)
+    export_clicked = False
+    download_csv_clicked = False
+
+    if "orders_df" not in st.session_state:
+        try:
+            st.session_state.orders_df = load_orders_db(DATABASE_URI, int(st.session_state.orders_refresh_token))
+        except ModuleNotFoundError as e:
+            st.error(
+                "Thiếu driver PostgreSQL để kết nối DB. Hãy cài dependencies rồi chạy lại:\n\n"
+                "`pip install -r requirements.txt`\n\n"
+                f"Chi tiết lỗi: `{e}`"
             )
-            st.bar_chart(chart_data, color=["#1E88E5", "#FF4B4B"], use_container_width=True)
+            st.stop()
+    df = st.session_state.orders_df
+
+    # Info bar nhỏ gọn (đưa lên đầu + canh giữa)
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <div style="text-align:center; color:#ddd; font-size: 0.95rem;">
+                <span><b>Số dòng:</b> {len(df):,}</span>
+                &nbsp;&nbsp;|&nbsp;&nbsp;
+                <span><b>Số cột:</b> {df.shape[1]:,}</span>
+                &nbsp;&nbsp;|&nbsp;&nbsp;
+                <span><b>Nguồn:</b> Server (PostgreSQL)</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # -------------------------
+    # Thanh điều khiển EDA (cột trái nhỏ, nằm trong tab)
+    # -------------------------
+    eda_nav_col, eda_content_col = st.columns([0.8, 2.2])
+    with eda_nav_col:
+        with st.container(border=True):
+            st.markdown("#### 📊 EDA")
+            eda_section = st.radio("Chọn mục", ["📄 Dữ liệu", "📈 Biểu đồ"], index=0, label_visibility="collapsed")
+            st.markdown("---")
+            export_clicked = st.button("⬆️ Export lên server", use_container_width=True, key="eda_export")
+            download_csv_clicked = st.button("⬇️ Tải từ server → CSV", use_container_width=True, key="eda_download_csv")
+
+    # Download to CSV (override)
+    if download_csv_clicked:
+        DATA_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(DATA_CSV_PATH, index=False)
+        st.success(f"Đã ghi đè CSV tại `{DATA_CSV_PATH.as_posix()}`")
+
+    # Export to server (replace table)
+    if export_clicked:
+        try:
+            engine = get_db_engine(DATABASE_URI)
+            df.to_sql("ecommerce_orders", con=engine, if_exists="replace", index=False)
+            st.success("Đã export dữ liệu lên server (replace table `ecommerce_orders`).")
+        except Exception as e:
+            st.error(f"Export thất bại: {e}")
+
+    # ======================
+    # 1) DỮ LIỆU (CRUD UI)
+    # ======================
+    with eda_content_col:
+        if eda_section == "📄 Dữ liệu":
+            st.subheader("📄 Dữ liệu đơn hàng")
+            st.caption("Xem danh sách đơn hàng. Nhấn **Chỉnh sửa** để mở menu cập nhật/xóa.")
+
+            if "Order ID" not in df.columns:
+                st.error("Không tìm thấy cột `Order ID` trong CSV để chỉnh sửa theo đơn hàng.")
+                st.stop()
+
+            if "orders_ui_mode" not in st.session_state:
+                st.session_state.orders_ui_mode = "list"  # list | edit
+
+            # ---------- LIST VIEW ----------
+            if st.session_state.orders_ui_mode == "list":
+                toolbar = st.columns([1.6, 1, 1.2])
+                with toolbar[0]:
+                    q = st.text_input("Tìm nhanh", placeholder="Order ID / Category / Status...")
+                with toolbar[1]:
+                    page_size = st.selectbox("Dòng / trang", [20, 50, 100], index=1)
+                with toolbar[2]:
+                    if st.button("➕ Thêm đơn", type="primary", use_container_width=True):
+                        new_row = {c: "" for c in df.columns}
+                        new_row["Order ID"] = f"NEW-{int(pd.Timestamp.now().timestamp())}"
+                        # Defaults theo rule business
+                        if "Status" in df.columns:
+                            new_row["Status"] = "Cancelled"
+                        if "Category" in df.columns:
+                            new_row["Category"] = "Blouse"
+                        if "Qty" in df.columns:
+                            new_row["Qty"] = 1
+                        if "currency" in df.columns:
+                            new_row["currency"] = "INR"
+                        if "Size" in df.columns:
+                            new_row["Size"] = "Free"
+                        if "fulfilled-by" in df.columns:
+                            new_row["fulfilled-by"] = ""  # None = Premium
+                        if "ship-service-level" in df.columns:
+                            new_row["ship-service-level"] = "Expedited"
+                        if "Sales Channel " in df.columns:
+                            new_row["Sales Channel "] = "Amazon.in"
+                        if "Fulfilment" in df.columns:
+                            new_row["Fulfilment"] = "Merchant"
+                        if "B2B" in df.columns:
+                            new_row["B2B"] = False
+                        if "index" in df.columns:
+                            try:
+                                new_row["index"] = int(pd.to_numeric(df["index"], errors="coerce").max() or -1) + 1
+                            except Exception:
+                                new_row["index"] = ""
+                        st.session_state.orders_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                        st.session_state.selected_order_id = new_row["Order ID"]
+                        st.session_state.orders_ui_mode = "edit"
+                        st.rerun()
+
+                # Pagination state (dùng input key riêng + nav flag để mũi tên hoạt động)
+                if "orders_page_typed" not in st.session_state:
+                    st.session_state.orders_page_typed = 1
+                if "orders_nav_to_page" in st.session_state:
+                    st.session_state.orders_page_typed = int(st.session_state.pop("orders_nav_to_page"))
+
+                st.markdown("**Trang**")
+                # Không nest columns quá 1 cấp: dùng 1 hàng columns duy nhất
+                p1, p2, p3, p4, p5 = st.columns([0.6, 1.1, 0.8, 0.6, 2.2])
+                with p1:
+                    prev_clicked = st.button("◀", use_container_width=True, key="orders_page_prev")
+                with p2:
+                    typed_page = st.number_input(
+                        "Nhập trang",
+                        min_value=1,
+                        value=int(st.session_state.orders_page_typed),
+                        step=1,
+                        label_visibility="collapsed",
+                        key="orders_page_typed",
+                    )
+                total_label_placeholder = p3.empty()
+                with p4:
+                    next_clicked = st.button("▶", use_container_width=True, key="orders_page_next")
+                with p5:
+                    st.markdown(
+                        "<div style='text-align:right; color:#777; padding-top: 28px;'>"
+                        f"File: <code>{DATA_CSV_PATH.as_posix()}</code>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                work_df = df
+                if q:
+                    s = q.strip().lower()
+                    mask = pd.Series(False, index=work_df.index)
+                    for c in ["Order ID", "Category", "Status"]:
+                        if c in work_df.columns:
+                            mask = mask | work_df[c].astype(str).str.lower().str.contains(s, na=False)
+                    work_df = work_df.loc[mask]
+
+                # Sort theo cột "index" nếu có (đúng thứ tự dữ liệu gốc)
+                if "index" in work_df.columns:
+                    work_df = work_df.sort_values("index", ascending=True, kind="mergesort")
+
+                total_rows = int(len(work_df))
+                total_pages = max(1, int(np.ceil(total_rows / int(page_size))))
+
+                # current page from typed input (clamp)
+                current_page = int(typed_page)
+                if current_page < 1:
+                    current_page = 1
+                if current_page > total_pages:
+                    current_page = total_pages
+
+                # Apply prev/next via nav flag (tránh set widget state sau khi render)
+                if prev_clicked:
+                    st.session_state["orders_nav_to_page"] = max(1, current_page - 1)
+                    st.rerun()
+                if next_clicked:
+                    st.session_state["orders_nav_to_page"] = min(total_pages, current_page + 1)
+                    st.rerun()
+
+                # Update label
+                total_label_placeholder.markdown(
+                    f"<div style='text-align:center; padding-top:6px;'>/ {total_pages}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                start = (current_page - 1) * int(page_size)
+                end = start + int(page_size)
+                page_df = work_df.iloc[start:end].copy()
+
+                # Hiển thị nhiều cột hơn (đã loại bỏ Unnamed: 22 khi load)
+                display_cols = list(page_df.columns[:20])
+
+                with st.container(border=True):
+                    st.markdown("#### 📋 Danh sách đơn hàng")
+                    # Click chọn row để auto chuyển sang chỉnh sửa (nếu Streamlit hỗ trợ selection)
+                    try:
+                        event = st.dataframe(
+                            page_df[display_cols],
+                            use_container_width=True,
+                            hide_index=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                        )
+                        if getattr(event, "selection", None) and event.selection.rows:
+                            selected_row = page_df.iloc[int(event.selection.rows[0])]
+                            st.session_state.selected_order_id = str(selected_row["Order ID"])
+                            st.session_state.orders_ui_mode = "edit"
+                            st.rerun()
+                    except TypeError:
+                        # Fallback cho bản Streamlit cũ
+                        st.dataframe(page_df[display_cols], use_container_width=True, hide_index=True)
+
+                if page_df.empty:
+                    st.warning("Không có dữ liệu ở trang hiện tại.")
+                    st.stop()
+
+                # Fallback chọn đơn (khi không có click row)
+                if "selected_order_id" not in st.session_state:
+                    st.session_state.selected_order_id = str(page_df["Order ID"].astype(str).iloc[0])
+                st.session_state.selected_order_id = st.selectbox(
+                    "Chọn đơn để thao tác",
+                    options=page_df["Order ID"].astype(str).tolist(),
+                    index=page_df["Order ID"].astype(str).tolist().index(str(st.session_state.selected_order_id))
+                    if str(st.session_state.selected_order_id) in page_df["Order ID"].astype(str).tolist()
+                    else 0,
+                )
+
+                action1, action2, _ = st.columns([1, 1, 2])
+                with action1:
+                    # Click row sẽ tự vào chỉnh sửa (nếu Streamlit hỗ trợ selection).
+                    # Fallback: dropdown "Chọn đơn để thao tác" ở trên sẽ đổi selected_order_id,
+                    # và nút dưới đây cho phép vào edit nếu không click được.
+                    if st.button("✏️ Chỉnh sửa", use_container_width=True, key="orders_list_edit_btn"):
+                        st.session_state.orders_ui_mode = "edit"
+                        st.rerun()
+                with action2:
+                    if st.button("🔄 Refresh", use_container_width=True, key="orders_list_refresh_db"):
+                        st.session_state.orders_refresh_token = int(st.session_state.get("orders_refresh_token", 0)) + 1
+                        st.session_state.pop("orders_df", None)
+                        st.rerun()
+
+            # ---------- EDIT VIEW ----------
+            else:
+                selected_order_id = str(st.session_state.get("selected_order_id", ""))
+                if not selected_order_id:
+                    st.session_state.orders_ui_mode = "list"
+                    st.rerun()
+
+                # header nav
+                nav1, nav2, nav3 = st.columns([1, 1, 2])
+                with nav1:
+                    if st.button("← Back", use_container_width=True):
+                        st.session_state.orders_ui_mode = "list"
+                        st.rerun()
+                with nav2:
+                    if st.button("Cancel", use_container_width=True):
+                        # không ghi file, chỉ quay lại list
+                        st.session_state.orders_ui_mode = "list"
+                        st.rerun()
+                with nav3:
+                    st.markdown(
+                        "<div style='text-align:right; color:#777; padding-top: 6px;'>"
+                        f"Đang chỉnh: <code>{selected_order_id}</code>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                # Lấy dòng đầu tiên match Order ID (nếu trùng ID sẽ edit theo dòng đầu tiên)
+                matches = df.index[df["Order ID"].astype(str) == selected_order_id].tolist()
+                if not matches:
+                    st.error("Không tìm thấy Order ID trong dữ liệu hiện tại.")
+                    st.session_state.orders_ui_mode = "list"
+                    st.rerun()
+                row_idx = int(matches[0])
+                row = df.loc[row_idx].to_dict()
+
+                core_cols = [
+                    c
+                    for c in [
+                        "Order ID",
+                        "Date",
+                        "Status",
+                        "Category",
+                        "Size",
+                        "Qty",
+                        "Amount",
+                        "currency",
+                        "Sales Channel ",
+                        "Fulfilment",
+                        "fulfilled-by",
+                        "ship-service-level",
+                        "B2B",
+                    ]
+                    if c in df.columns
+                ]
+                other_cols = [c for c in df.columns if c not in core_cols]
+                locked_feature_cols = [
+                    c
+                    for c in ["Status_binary", "size_ordinal", "B2B_binary", "fulfillment_binary", "ship_premium"]
+                    if c in df.columns
+                ]
+                editable_other_cols = [c for c in other_cols if c not in locked_feature_cols]
+
+                st.markdown("#### 🧾 Menu chỉnh sửa")
+
+                # Seed state cho editor để thay đổi là rerun (auto update vector)
+                editor_key_prefix = f"order_edit::{selected_order_id}::"
+                if st.session_state.get(editor_key_prefix + "__seeded") != True:
+                    for col in core_cols + editable_other_cols:
+                        raw = row.get(col, "")
+                        if col == "Qty":
+                            try:
+                                st.session_state[editor_key_prefix + col] = int(float(raw))
+                            except Exception:
+                                st.session_state[editor_key_prefix + col] = 1
+                            if int(st.session_state[editor_key_prefix + col]) < 1:
+                                st.session_state[editor_key_prefix + col] = 1
+                        elif col == "Amount":
+                            try:
+                                st.session_state[editor_key_prefix + col] = float(raw)
+                            except Exception:
+                                st.session_state[editor_key_prefix + col] = 0.0
+                        elif col == "currency":
+                            st.session_state[editor_key_prefix + col] = "INR"
+                        elif col == "Size":
+                            sval = _safe_text(raw).strip()
+                            st.session_state[editor_key_prefix + col] = sval if sval in SIZE_ORDER else "Free"
+                        elif col == "fulfilled-by":
+                            fb = _safe_text(raw).strip()
+                            st.session_state[editor_key_prefix + col] = "Easy Ship" if fb == "Easy Ship" else ""
+                        elif col == "ship-service-level":
+                            lvl = _safe_text(raw).strip()
+                            st.session_state[editor_key_prefix + col] = "Expedited" if lvl == "Expedited" else "Standard"
+                        elif col == "Sales Channel ":
+                            st.session_state[editor_key_prefix + col] = "Amazon.in"
+                        elif col == "Fulfilment":
+                            f = _safe_text(raw).strip()
+                            st.session_state[editor_key_prefix + col] = f if f in {"Amazon", "Merchant"} else "Merchant"
+                        elif col == "B2B":
+                            st.session_state[editor_key_prefix + col] = _to_bool(raw)
+                        elif col == "Status":
+                            sval = _safe_text(raw).strip()
+                            st.session_state[editor_key_prefix + col] = sval if sval else "Cancelled"
+                        elif col == "Category":
+                            cval = _safe_text(raw).strip()
+                            st.session_state[editor_key_prefix + col] = cval if cval else "Blouse"
+                        elif col in ["Size", "currency", "fulfilled-by"]:
+                            st.session_state[editor_key_prefix + col] = _safe_text(raw)
+                        elif col == "promotion":
+                            try:
+                                st.session_state[editor_key_prefix + col] = 1 if str(raw).strip() in {"1", "True", "true"} else 0
+                            except Exception:
+                                st.session_state[editor_key_prefix + col] = 0
+                        else:
+                            # text_input yêu cầu state là string
+                            st.session_state[editor_key_prefix + col] = _safe_text(raw)
+                    st.session_state[editor_key_prefix + "__seeded"] = True
+
+                c1, c2 = st.columns(2)
+                edited_row = row.copy()
+                for i, col in enumerate(core_cols):
+                    target = c1 if i % 2 == 0 else c2
+                    with target:
+                        key = editor_key_prefix + col
+                        val = st.session_state.get(key, "")
+                        if col == "Qty":
+                            try:
+                                ival = int(float(val))
+                            except Exception:
+                                ival = 1
+                            if ival < 1:
+                                ival = 1
+                            edited_row[col] = st.number_input(col, min_value=1, value=ival, step=1, key=key)
+                        elif col == "Amount":
+                            try:
+                                fval = float(val)
+                            except Exception:
+                                fval = 0.0
+                            edited_row[col] = st.number_input(col, min_value=0.0, value=fval, step=10.0, format="%.2f", key=key)
+                        elif col in ["Status", "Category", "Size", "currency", "fulfilled-by", "ship-service-level", "Sales Channel ", "Fulfilment", "B2B"]:
+                            if col == "currency":
+                                edited_row[col] = st.text_input(col, value="INR", disabled=True, key=key)
+                                continue
+                            if col == "Size":
+                                sval = str(val).strip() if val is not None else ""
+                                default_size = sval if sval in SIZE_ORDER else "Free"
+                                edited_row[col] = st.selectbox(col, options=SIZE_ORDER, index=SIZE_ORDER.index(default_size), key=key)
+                                continue
+                            if col == "fulfilled-by":
+                                # Easy Ship = thường, rỗng = premium
+                                opts = ["Easy Ship", ""]
+                                sval = str(val).strip() if val is not None else ""
+                                edited_row[col] = st.selectbox(
+                                    col,
+                                    options=opts,
+                                    format_func=lambda x: "Easy Ship (Thường)" if str(x).strip() == "Easy Ship" else "Premium (Không Easy Ship)",
+                                    index=0 if sval == "Easy Ship" else 1,
+                                    key=key,
+                                )
+                                continue
+                            if col == "ship-service-level":
+                                # auto update theo fulfilled-by, không cho chỉnh tay
+                                fb_now = str(edited_row.get("fulfilled-by", "")).strip()
+                                lvl = "Standard" if fb_now == "Easy Ship" else "Expedited"
+                                edited_row[col] = st.text_input(col, value=lvl, disabled=True, key=key)
+                                continue
+                            if col == "Sales Channel ":
+                                edited_row[col] = st.text_input(col, value="Amazon.in", disabled=True, key=key)
+                                continue
+                            if col == "Fulfilment":
+                                opts = ["Amazon", "Merchant"]
+                                sval = str(val).strip() if val is not None else ""
+                                if sval not in opts:
+                                    sval = "Merchant"
+                                edited_row[col] = st.selectbox(col, options=opts, index=opts.index(sval), key=key)
+                                continue
+                            if col == "B2B":
+                                b2b_val = _to_bool(val)
+                                edited_row[col] = st.selectbox(
+                                    "B2B",
+                                    options=[False, True],
+                                    format_func=lambda x: "False" if x is False else "True",
+                                    index=1 if b2b_val else 0,
+                                    key=key,
+                                )
+                                continue
+
+                            opts = sorted(df[col].dropna().astype(str).unique().tolist())[:200] if col in df.columns else []
+                            sval = str(val) if val is not None else ""
+                            if col == "Status":
+                                sval = sval.strip() or "Cancelled"
+                            if col == "Category":
+                                sval = sval.strip() or "Blouse"
+                            if sval and sval not in opts:
+                                opts = [sval] + opts
+                            edited_row[col] = st.selectbox(col, options=opts if opts else [sval], index=0, key=key)
+                        else:
+                            edited_row[col] = st.text_input(col, value=str(val) if val is not None else "", key=key)
+
+                with st.expander("Trường nâng cao (tuỳ chọn)"):
+                    adv_cols = st.columns(2)
+                    for i, col in enumerate(editable_other_cols):
+                        target = adv_cols[i % 2]
+                        with target:
+                            key = editor_key_prefix + col
+                            val = st.session_state.get(key, "")
+                            if col == "promotion":
+                                edited_row[col] = st.selectbox(
+                                    "promotion",
+                                    options=[0, 1],
+                                    format_func=lambda x: "Không (0)" if x == 0 else "Có (1)",
+                                    index=1 if str(val).strip() in {"1", "True", "true"} else 0,
+                                    key=key,
+                                )
+                            else:
+                                edited_row[col] = st.text_input(
+                                    col,
+                                    value=str(val) if val is not None else "",
+                                    disabled=(col == "index"),
+                                    key=key,
+                                )
+
+                computed = apply_auto_features(edited_row.copy(), list(df.columns))
+                vector_fields = [
+                    ("Qty", computed.get("Qty", "—")),
+                    ("Amount", computed.get("Amount", "—")),
+                    ("fulfillment_binary", computed.get("fulfillment_binary", "—")),
+                    ("promotion", computed.get("promotion", "—")),
+                    ("size_ordinal", computed.get("size_ordinal", "—")),
+                    ("B2B_binary", computed.get("B2B_binary", "—")),
+                ]
+                with st.container(border=True):
+                    st.markdown("#### 📌 Thông số vector")
+                    st.dataframe(
+                        pd.DataFrame(vector_fields, columns=["Feature", "Value"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.caption(f"**Status_binary:** {computed.get('Status_binary', '—')}")
+
+                save_btn, delete_btn = st.columns([1, 1])
+                do_save = save_btn.button("💾 Lưu", type="primary", use_container_width=True, key=editor_key_prefix + "__save")
+                do_delete = delete_btn.button("🗑️ Xóa đơn", use_container_width=True, key=editor_key_prefix + "__delete")
+
+                if do_delete:
+                    st.session_state.orders_df = df.drop(index=row_idx).reset_index(drop=True)
+                    st.success(f"Đã xóa đơn `{selected_order_id}` (chưa lưu vào file).")
+                    st.session_state.orders_ui_mode = "list"
+                    st.rerun()
+
+                if do_save:
+                    new_df = df.copy()
+                    # Auto update các feature cốt lõi (không cho sửa tay)
+                    computed = apply_auto_features(computed, list(df.columns))
+                    for col in df.columns:
+                        new_df.at[row_idx, col] = computed.get(col, new_df.at[row_idx, col])
+                    new_df.to_csv(DATA_CSV_PATH, index=False)
+                    load_orders_csv.clear()
+                    st.session_state.orders_df = load_orders_csv(str(DATA_CSV_PATH), os.path.getmtime(DATA_CSV_PATH))
+                    st.success("Đã lưu thay đổi vào CSV.")
+                    st.session_state.orders_ui_mode = "list"
+                    st.rerun()
+
+    # ======================
+    # 2) BIỂU ĐỒ (BOXPLOT)
+    # ======================
+        else:
+            st.subheader("📈 Biểu đồ: Amount (tiền) theo Category (Boxplot)")
+
+            if "Category" not in df.columns or "Amount" not in df.columns:
+                st.error("Cần có cột `Category` và `Amount` trong file CSV.")
+                st.stop()
+
+            with eda_nav_col:
+                with st.container(border=True):
+                    st.markdown("#### ⚙️ Tùy chỉnh biểu đồ")
+                    show_fliers = st.checkbox("Hiện outliers", value=False, key="eda_show_fliers")
+
+            work = df[["Category", "Amount"]].dropna()
+            work = work[work["Amount"].apply(lambda x: isinstance(x, (int, float, np.number)))]
+
+            if work.empty:
+                st.warning("Không đủ dữ liệu hợp lệ để vẽ boxplot.")
+                st.stop()
+
+            ordered_categories = work["Category"].value_counts().index.tolist()
+            filtered = work[work["Category"].isin(ordered_categories)]
+            grouped = [filtered.loc[filtered["Category"] == c, "Amount"].values for c in ordered_categories]
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Số category", f"{len(ordered_categories)}")
+            m2.metric("Số mẫu (filtered)", f"{len(filtered):,}")
+            m3.metric("Median Amount (all)", f"{work['Amount'].median():.2f}")
+
+            fig, ax = plt.subplots(figsize=(11.0, 5.2))
+            bp = ax.boxplot(
+                grouped,
+                labels=ordered_categories,
+                showfliers=show_fliers,
+                patch_artist=True,
+            )
+            for box in bp["boxes"]:
+                box.set(facecolor="#1E88E5", alpha=0.25, edgecolor="#1E88E5")
+            for med in bp["medians"]:
+                med.set(color="#1565C0", linewidth=2)
+
+            ax.set_title("Amount (tiền) theo Category", fontsize=12)
+            ax.set_xlabel("Category")
+            ax.set_ylabel("Amount (INR)")
+            ax.grid(axis="y", linestyle="--", alpha=0.25)
+            plt.setp(ax.get_xticklabels(), rotation=20, ha="right")
+            st.pyplot(fig, clear_figure=True, use_container_width=True)
 
 # ----------------------------------------------------------------------
 # TAB 3: PROJECT ASSISTANT (CHATBOT)
@@ -252,7 +922,7 @@ elif active_page == "💬 Project Assistant":
                 st.rerun()
 
 # ----------------------------------------------------------------------
-# TAB 4: BROWSE SẢN PHẨM (CLOTHING) + TAB PHỤ
+# TAB 4: BROWSE SẢN PHẨM (CLOTHING)
 # ----------------------------------------------------------------------
 elif active_page == "🛍️ Browser Sản Phẩm":
     st.markdown(
@@ -269,140 +939,100 @@ elif active_page == "🛍️ Browser Sản Phẩm":
 
     if "browser_subtab" not in st.session_state:
         st.session_state.browser_subtab = "🛒 Duyệt sản phẩm"
+    # Ẩn điều hướng sub-tab khỏi người dùng (chỉ điều khiển bằng state)
+    browser_subtab = st.session_state.browser_subtab
 
-    browser_subtab = st.radio(
-        "Tab phụ",
-        ["🛒 Duyệt sản phẩm", "🎯 Dự đoán sản phẩm"],
-        index=["🛒 Duyệt sản phẩm", "🎯 Dự đoán sản phẩm"].index(st.session_state.browser_subtab),
-        horizontal=True,
-        label_visibility="collapsed",
-        key="browser_subtab",
-    )
+    selected_clothing_type = "Tất cả quần áo"
 
-    # Thanh bộ lọc bên trái + khu vực hiển thị danh sách sản phẩm bên phải
-    left_col, right_col = st.columns([0.9, 2.1])
+    selected_product = st.session_state.get("selected_product")
 
-    # ------------------- CỘT TRÁI: THANH LỌC SẢN PHẨM -------------------
-    with left_col:
+    # 1) VIEW: DỰ ĐOÁN (ẩn bộ lọc, full width)
+    if browser_subtab == "🎯 Dự đoán sản phẩm":
+        if not selected_product:
+            st.warning("Bạn chưa chọn sản phẩm. Hãy quay lại tab 🛒 Duyệt sản phẩm và bấm “Xem dự đoán”.")
+        else:
+            nav1, nav2, _ = st.columns([1, 1, 2])
+            with nav1:
+                if st.button("← Quay lại duyệt", use_container_width=True, key="back_to_browse"):
+                    st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
+                    st.rerun()
+            with nav2:
+                if st.button("Hủy chọn sản phẩm", use_container_width=True, key="cancel_product"):
+                    st.session_state.pop("selected_product", None)
+                    st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
+                    st.rerun()
+
+            with st.container(border=True):
+                st.markdown("#### ✅ Sản phẩm đã chọn")
+                p = selected_product
+                pcol1, pcol2 = st.columns([1, 1.6])
+                with pcol1:
+                    st.image(p["image_url"], use_column_width=True)
+                with pcol2:
+                    st.markdown(f"**{p['name']}**")
+                    st.caption(p["subtitle"])
+                    st.markdown(
+                        f"<span style='color:#B12704; font-weight:700; font-size: 1.05rem;'>₹ {p['price_inr']:,} INR</span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(p["delivery_text"])
+
+            st.write("")
+            run_prediction_ui(
+                amount=float(selected_product["price_inr"]),
+                locked_amount=True,
+                widget_prefix=f"product_{selected_product['id']}",
+            )
+        st.stop()
+
+    # 2) VIEW: DUYỆT SẢN PHẨM (hiện bộ lọc + danh sách)
+    col_left, col_right = st.columns([0.9, 2.1])
+
+    with col_left:
         with st.container(border=True):
-            st.markdown("#### 🔍 Bộ lọc sản phẩm")
+            st.markdown("#### 🔍 Bộ lọc sản phẩm (demo)")
 
-            # Nhóm: Loại trang phục
             st.markdown("**Loại quần áo**")
-            clothing_types = [
-                "Tất cả quần áo",
-                "Áo thun",
-                "Áo sơ mi",
-                "Áo khoác / Hoodie",
-                "Quần dài",
-                "Quần short",
-                "Đầm / Váy",
-            ]
-            selected_clothing_type = st.radio(
+            st.radio(
                 "",
-                clothing_types,
+                ["Tất cả", "Áo thun", "Áo sơ mi", "Áo khoác / Hoodie", "Quần dài", "Quần short", "Đầm / Váy"],
                 index=0,
             )
 
             st.markdown("---")
-
-            # Nhóm: Giới tính
             st.markdown("**Dành cho**")
-            target_segment = st.checkbox("Nam", value=True)
-            target_segment_female = st.checkbox("Nữ", value=True)
-            target_segment_kid = st.checkbox("Trẻ em", value=False)
+            st.checkbox("Nam", value=True)
+            st.checkbox("Nữ", value=True)
+            st.checkbox("Trẻ em", value=False)
 
             st.markdown("---")
-
-            # Nhóm: Kích cỡ (demo nhanh)
-            st.markdown("**Kích cỡ phổ biến**")
+            st.markdown("**Kích cỡ**")
             size_cols = st.columns(3)
-            sizes = ["S", "M", "L", "XL"]
-            size_selected = {}
-            for i, size in enumerate(sizes):
+            for i, size in enumerate(["XS", "S", "M", "L", "XL", "2XL"]):
                 with size_cols[i % 3]:
-                    size_selected[size] = st.checkbox(size, value=(size in ["M", "L"]))
+                    st.checkbox(size, value=(size in ["M", "L"]))
 
             st.markdown("---")
-
-            # Nhóm: Khoảng giá
             st.markdown("**Khoảng giá (INR)**")
-            price_min, price_max = st.slider(
-                "Chọn khoảng giá",
-                min_value=100,
-                max_value=10000,
-                value=(0, 1000),
-                step=10,
-            )
+            st.slider("Chọn khoảng giá", min_value=100, max_value=10000, value=(500, 3000), step=100)
 
-            st.button("Áp dụng bộ lọc", use_container_width=True, type="primary")
+            st.markdown("---")
+            st.checkbox("Chỉ hiển thị sản phẩm Premium", value=False)
+            st.checkbox("Chỉ hiển thị sản phẩm đang giảm giá", value=False)
 
-    # ------------------- CỘT PHẢI: KHU VỰC KẾT QUẢ / DỰ ĐOÁN -------------------
-    with right_col:
-        selected_product = st.session_state.get("selected_product")
+            st.button("Áp dụng bộ lọc (demo)", use_container_width=True)
 
-        if browser_subtab == "🎯 Dự đoán sản phẩm":
-            if not selected_product:
-                st.warning("Bạn chưa chọn sản phẩm. Hãy quay lại tab 🛒 Duyệt sản phẩm và bấm “Xem dự đoán”.")
-            else:
-                nav1, nav2, _ = st.columns([1, 1, 2])
-                with nav1:
-                    if st.button("← Quay lại duyệt", use_container_width=True, key="back_to_browse"):
-                        st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
-                        st.rerun()
-                with nav2:
-                    if st.button("Hủy chọn sản phẩm", use_container_width=True, key="cancel_product"):
-                        st.session_state.pop("selected_product", None)
-                        st.session_state["nav_to_subtab"] = "🛒 Duyệt sản phẩm"
-                        st.rerun()
-
-                with st.container(border=True):
-                    st.markdown("#### ✅ Sản phẩm đã chọn")
-                    p = selected_product
-                    pcol1, pcol2 = st.columns([1, 1.6])
-                    with pcol1:
-                        st.image(p["image_url"], use_container_width=True)
-                    with pcol2:
-                        st.markdown(f"**{p['name']}**")
-                        st.caption(p["subtitle"])
-                        st.markdown(
-                            f"<span style='color:#B12704; font-weight:700; font-size: 1.05rem;'>₹ {p['price_inr']:,} INR</span>",
-                            unsafe_allow_html=True,
-                        )
-                        st.caption(p["delivery_text"])
-
-                st.write("")
-                run_prediction_ui(
-                    amount=float(selected_product["price_inr"]),
-                    locked_amount=True,
-                    widget_prefix=f"product_{selected_product['id']}",
-                )
-            # Dừng ở đây để không render danh sách sản phẩm bên dưới
-            st.stop()
-
-        # Thanh tìm kiếm + sort
+    with col_right:
+        # Thanh tìm kiếm (thật, nhưng chưa gắn logic lọc)
         with st.container(border=True):
-            top_row = st.columns([2.2, 1, 1])
-            with top_row[0]:
-                search_query = st.text_input(
-                    "Tìm kiếm quần áo",
-                    placeholder="Ví dụ: áo hoodie đen, áo thun oversize...",
-                )
-            with top_row[1]:
-                sort_by = st.selectbox(
-                    "Sắp xếp theo",
-                    ["Phù hợp nhất", "Giá tăng dần", "Giá giảm dần", "Đánh giá cao nhất", "Mới nhất"],
-                )
-            with top_row[2]:
-                st.selectbox(
-                    "Hiển thị",
-                    ["24 sản phẩm / trang", "48 sản phẩm / trang", "96 sản phẩm / trang"],
-                    index=0,
-                )
+            search_query = st.text_input(
+                "Tìm kiếm quần áo",
+                placeholder="Ví dụ: hoodie đen, áo thun oversize...",
+            )
 
         st.write("")
 
-        # Thanh breadcrumb mô phỏng giống Amazon
+        # Thanh breadcrumb mô phỏng giống Amazon (chỉ hiện ở subtab duyệt)
         st.markdown(
             """
             <div style="font-size: 0.9rem; color: #777; margin-bottom: 0.5rem;">
@@ -459,7 +1089,7 @@ elif active_page == "🛍️ Browser Sản Phẩm":
         for idx, p in enumerate(products_demo):
             with cols[idx % 3]:
                 with st.container(border=True):
-                    st.image(p["image_url"], use_container_width=True)
+                    st.image(p["image_url"], use_column_width=True)
                     st.markdown(f"**{p['name']}**")
                     st.caption(p["subtitle"])
                     st.markdown(
