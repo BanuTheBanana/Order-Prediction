@@ -976,12 +976,16 @@ elif active_page == "📊 Data Exploration":
                     computed = apply_auto_features(computed, list(df.columns))
                     for col in df.columns:
                         new_df.at[row_idx, col] = computed.get(col, new_df.at[row_idx, col])
+                        
+                    DATA_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
                     new_df.to_csv(DATA_CSV_PATH, index=False)
                     load_orders_csv.clear()
                     st.session_state.orders_df = load_orders_csv(str(DATA_CSV_PATH), os.path.getmtime(DATA_CSV_PATH))
                     st.success("Đã lưu thay đổi vào CSV.")
                     st.session_state.orders_ui_mode = "list"
                     st.rerun()
+
+                    
 
     # ======================
     # 2) BIỂU ĐỒ (BOXPLOT)
