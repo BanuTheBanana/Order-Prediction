@@ -28,6 +28,53 @@ except Exception as e:
     st.error(f"⚠️ Không thể tải mô hình: {e}. Vui lòng kiểm tra lại đường dẫn file 'LG_model.joblib'")
     st.stop()
 
+
+def get_model_feature_names(m) -> list[str]:
+    # Try sklearn API first
+    names = getattr(m, "feature_names_in_", None)
+    if names is not None:
+        return [str(x) for x in list(names)]
+
+    # LightGBM sklearn wrapper
+    names = getattr(m, "feature_name_", None)
+    if names is not None:
+        return [str(x) for x in list(names)]
+
+    booster = getattr(m, "booster_", None) or getattr(m, "_Booster", None)
+    if booster is not None:
+        try:
+            return [str(x) for x in booster.feature_name()]
+        except Exception:
+            pass
+
+    return []
+
+
+@st.cache_data(show_spinner=False)
+def load_category_options() -> list[str]:
+    # Prefer CSV (local) for quick startup; fallback to a small default list
+    try:
+        if DATA_CSV_PATH.exists():
+            df = pd.read_csv(DATA_CSV_PATH)
+            for col in ["category", "Category"]:
+                if col in df.columns:
+                    opts = (
+                        df[col]
+                        .dropna()
+                        .astype(str)
+                        .map(lambda x: x.strip())
+                        .loc[lambda s: s != ""]
+                        .unique()
+                        .tolist()
+                    )
+                    opts = sorted(opts)[:300]
+                    if opts:
+                        return opts
+    except Exception:
+        pass
+
+    return ["Blouse", "Bottom", "Dress", "Dupatta", "Ethnic Dress", "Kurta", "Saree", "Set", "Top"]
+
 # ==========================================
 # DỮ LIỆU EDA (CSV) - Tự refresh theo mtime
 # ==========================================
@@ -242,7 +289,7 @@ active_page = st.radio(
 )
 
 
-def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str):
+def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str, locked_category: bool = False, category_value: str | None = None):
     col_left, col_right = st.columns([1, 1.3])
 
     with col_right:
@@ -288,6 +335,22 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                     format_func=lambda x: "Premium" if x == 1 else "Thường",
                     key=f"{widget_prefix}_fulfill",
                 )
+                category_opts = load_category_options()
+                default_cat = "Blouse" if "Blouse" in category_opts else (category_opts[0] if category_opts else "Blouse")
+                fixed_cat = str(category_value) if category_value is not None and str(category_value).strip() else None
+                if fixed_cat:
+                    if fixed_cat not in category_opts:
+                        category_opts = [fixed_cat] + list(category_opts)
+                    selected_cat = fixed_cat
+                else:
+                    selected_cat = default_cat
+                category = st.selectbox(
+                    "🏷️ Category",
+                    options=category_opts if category_opts else [selected_cat],
+                    index=(category_opts.index(selected_cat) if category_opts and selected_cat in category_opts else 0),
+                    key=f"{widget_prefix}_category",
+                    disabled=locked_category,
+                )
 
             with f_col2:
                 size_labels = [
@@ -309,24 +372,44 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str)
                     format_func=lambda x: size_labels[int(x)],
                     key=f"{widget_prefix}_size",
                 )
-                promotion = st.selectbox(
-                    "🎁 Ưu đãi",
-                    options=[0, 1],
-                    format_func=lambda x: "Có" if x == 1 else "Không",
-                    key=f"{widget_prefix}_promo",
-                )
 
         if st.button("🚀 Chạy Mô Hình Dự Đoán", type="primary", use_container_width=True, key=f"{widget_prefix}_run"):
-            input_data = pd.DataFrame(
-                {
-                    "Qty": [quantity],
-                    "Amount": [float(amount)],
-                    "fulfillment_binary": [fulfillment_binary],
-                    "promotion": [promotion],
-                    "size_ordinal": [size_ordinal],
-                    "B2B_binary": [B2B_binary],
-                }
-            )
+            feature_names = get_model_feature_names(model)
+            expected_lower = [c.lower() for c in feature_names]
+
+            def put(lower_name: str, fallback_name: str, value):
+                if feature_names:
+                    if lower_name in expected_lower:
+                        actual = feature_names[expected_lower.index(lower_name)]
+                        row[actual] = value
+                else:
+                    row[fallback_name] = value
+
+            # Build row dynamically to avoid feature mismatch between model versions
+            row: dict[str, object] = {}
+            put("qty", "Qty", int(quantity))
+            put("amount", "Amount", float(amount))
+            put("fulfillment_binary", "fulfillment_binary", int(fulfillment_binary))
+            put("b2b_binary", "B2B_binary", int(B2B_binary))
+            put("size_ordinal", "size_ordinal", int(size_ordinal))
+            put("category", "category", str(category))
+
+            input_data = pd.DataFrame([row])
+
+            # Ensure categorical dtype for LightGBM if needed
+            for c in list(input_data.columns):
+                if str(c).lower() == "category":
+                    try:
+                        input_data[c] = input_data[c].astype("category")
+                    except Exception:
+                        pass
+
+            # If we can detect exact feature ordering, enforce it and fill missing with NaN
+            if feature_names:
+                for c in feature_names:
+                    if c not in input_data.columns:
+                        input_data[c] = np.nan
+                input_data = input_data[feature_names]
 
             with st.spinner("Đang chạy mô hình AI để dự đoán khả năng thành công..."):
                 import time
@@ -391,7 +474,7 @@ if active_page == "🧪 Playground":
         unsafe_allow_html=True,
     )
     st.divider()
-    run_prediction_ui(amount=100.0, locked_amount=False, widget_prefix="playground")
+    run_prediction_ui(amount=100.0, locked_amount=False, widget_prefix="playground", locked_category=False)
 
 # ----------------------------------------------------------------------
 # TAB 2: EXPLORATORY DATA ANALYSIS (EDA)
@@ -441,7 +524,7 @@ elif active_page == "📊 Data Exploration":
         )
 
     # -------------------------
-    # Thanh điều khiển EDA (cột trái nhỏ, nằm trong tab)
+    # Thanh điều khiển EDA
     # -------------------------
     eda_nav_col, eda_content_col = st.columns([0.8, 2.2])
     with eda_nav_col:
@@ -449,14 +532,17 @@ elif active_page == "📊 Data Exploration":
             st.markdown("#### 📊 EDA")
             eda_section = st.radio("Chọn mục", ["📄 Dữ liệu", "📈 Biểu đồ"], index=0, label_visibility="collapsed")
             st.markdown("---")
-            export_clicked = st.button("⬆️ Export lên server", use_container_width=True, key="eda_export")
-            download_csv_clicked = st.button("⬇️ Tải từ server → CSV", use_container_width=True, key="eda_download_csv")
-
-    # Download to CSV (override)
-    if download_csv_clicked:
-        DATA_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(DATA_CSV_PATH, index=False)
-        st.success(f"Đã ghi đè CSV tại `{DATA_CSV_PATH.as_posix()}`")
+            export_clicked = st.button("⬆️ Tải lên DB", use_container_width=True, key="eda_export")
+            
+            # === NÚT TẢI CSV VỀ MÁY NGƯỜI DÙNG (thay vì ghi file trên server) ===
+            st.download_button(
+                label="⬇️ Tải dữ liệu CSV về Máy Tính",
+                data=df.to_csv(index=False).encode('utf-8'),
+                file_name=f"ecommerce_orders_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="eda_download_csv"
+            )
 
     # Export to server (replace table)
     if export_clicked:
@@ -702,7 +788,8 @@ elif active_page == "📊 Data Exploration":
                     ]
                     if c in df.columns
                 ]
-                other_cols = [c for c in df.columns if c not in core_cols]
+                # Model mới bỏ hẳn promotion => không cho chỉnh/hiện promotion nữa
+                other_cols = [c for c in df.columns if c not in core_cols and c != "promotion"]
                 locked_feature_cols = [
                     c
                     for c in ["Status_binary", "size_ordinal", "B2B_binary", "fulfillment_binary", "ship_premium"]
@@ -755,11 +842,6 @@ elif active_page == "📊 Data Exploration":
                             st.session_state[editor_key_prefix + col] = cval if cval else "Blouse"
                         elif col in ["Size", "currency", "fulfilled-by"]:
                             st.session_state[editor_key_prefix + col] = _safe_text(raw)
-                        elif col == "promotion":
-                            try:
-                                st.session_state[editor_key_prefix + col] = 1 if str(raw).strip() in {"1", "True", "true"} else 0
-                            except Exception:
-                                st.session_state[editor_key_prefix + col] = 0
                         else:
                             # text_input yêu cầu state là string
                             st.session_state[editor_key_prefix + col] = _safe_text(raw)
@@ -853,28 +935,19 @@ elif active_page == "📊 Data Exploration":
                         with target:
                             key = editor_key_prefix + col
                             val = st.session_state.get(key, "")
-                            if col == "promotion":
-                                edited_row[col] = st.selectbox(
-                                    "promotion",
-                                    options=[0, 1],
-                                    format_func=lambda x: "Không (0)" if x == 0 else "Có (1)",
-                                    index=1 if str(val).strip() in {"1", "True", "true"} else 0,
-                                    key=key,
-                                )
-                            else:
-                                edited_row[col] = st.text_input(
-                                    col,
-                                    value=str(val) if val is not None else "",
-                                    disabled=(col == "index"),
-                                    key=key,
-                                )
+                            edited_row[col] = st.text_input(
+                                col,
+                                value=str(val) if val is not None else "",
+                                disabled=(col == "index"),
+                                key=key,
+                            )
 
                 computed = apply_auto_features(edited_row.copy(), list(df.columns))
                 vector_fields = [
                     ("Qty", computed.get("Qty", "—")),
                     ("Amount", computed.get("Amount", "—")),
                     ("fulfillment_binary", computed.get("fulfillment_binary", "—")),
-                    ("promotion", computed.get("promotion", "—")),
+                    ("Category", computed.get("Category", computed.get("category", "—"))),
                     ("size_ordinal", computed.get("size_ordinal", "—")),
                     ("B2B_binary", computed.get("B2B_binary", "—")),
                 ]
@@ -1064,7 +1137,7 @@ elif active_page == "📊 Data Exploration":
                     # PLOT 3: Pearson vs Mutual Information (Numerical)
                     # ---------------------------------------------------------
                     st.markdown("### 🔍 Correlation vs Mutual Information (Numerical)")
-                    features = ['Qty', 'Amount', 'fulfillment_binary', 'ship_premium', 'size_ordinal', 'B2B_binary', 'promotion']
+                    features = ['Qty', 'Amount', 'fulfillment_binary', 'ship_premium', 'size_ordinal', 'B2B_binary']
                     existing_num_cols = [col for col in features if col in work_df.columns]
 
                     if existing_num_cols:
@@ -1315,6 +1388,8 @@ elif active_page == "🛍️ Browser Sản Phẩm":
                 amount=float(selected_product["price_inr"]),
                 locked_amount=True,
                 widget_prefix=f"product_{selected_product['id']}",
+                locked_category=True,
+                category_value=selected_product.get("category"),
             )
         st.stop()
 
@@ -1381,6 +1456,7 @@ elif active_page == "🛍️ Browser Sản Phẩm":
                 "name": "Áo thun nam basic cổ tròn",
                 "subtitle": "Trắng / Cotton 100%",
                 "price_inr": 499,
+                "category": "Top",
                 "delivery_text": "Dự kiến giao: 3–5 ngày làm việc.",
                 "image_url": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=400&q=80",
             },
@@ -1389,14 +1465,16 @@ elif active_page == "🛍️ Browser Sản Phẩm":
                 "name": "Hoodie oversize unisex nỉ dày",
                 "subtitle": "Đen / Form rộng",
                 "price_inr": 1299,
+                "category": "Top",
                 "delivery_text": "Dự kiến giao: 4–6 ngày làm việc.",
                 "image_url": "https://images.unsplash.com/photo-1529927066849-66e1abc70a2e?auto=format&fit=crop&w=400&q=80",
             },
             {
                 "id": "shirt_navy_899",
-                "name": "Áo sơ mi tay dài slim fit",
+                "name": "Áo bộ dài slim fit",
                 "subtitle": "Xanh navy",
                 "price_inr": 899,
+                "category": "Set",
                 "delivery_text": "Dự kiến giao: 2–4 ngày làm việc.",
                 "image_url": "https://images.unsplash.com/photo-1528701800489-20be3c30c1d5?auto=format&fit=crop&w=400&q=80",
             },
@@ -1405,14 +1483,16 @@ elif active_page == "🛍️ Browser Sản Phẩm":
                 "name": "Quần jean nam dáng slim",
                 "subtitle": "Xanh đậm / Co giãn nhẹ",
                 "price_inr": 2500,
+                "category": "Bottom",
                 "delivery_text": "Dự kiến giao: 3–5 ngày làm việc.",
                 "image_url": "https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=400&q=80",
             },
             {
                 "id": "tee_pink_749",
-                "name": "Áo thun nữ oversize graphic",
+                "name": "Áo Blouse nữ oversize graphic",
                 "subtitle": "Hồng pastel",
                 "price_inr": 749,
+                "category": "Blouse",
                 "delivery_text": "Dự kiến giao: 5–7 ngày làm việc.",
                 "image_url": "https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=400&q=80",
             },
