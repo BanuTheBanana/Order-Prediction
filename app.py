@@ -1303,7 +1303,7 @@ elif active_page == "📊 Data Exploration":
                     # ---------------------------------------------------------
                     # CLUSTERING: K-MEANS PHÂN CỤM ĐƠN HÀNG
                     # ---------------------------------------------------------
-                    st.markdown("### 🤖 Máy học Không giám sát: Phân cụm Đơn hàng (K-Means)")
+                    st.markdown("### K-means: Clustering ")
                     features_to_cluster = ['Amount', 'fulfillment_binary', 'B2B_binary', 'size_ordinal']
                     missing_cols = [c for c in features_to_cluster if c not in work_df.columns]
 
@@ -1335,7 +1335,7 @@ elif active_page == "📊 Data Exploration":
                             clu_col1, clu_col2 = st.columns([1.1, 1.4])
 
                             with clu_col1:
-                                st.markdown("**Đặc tả các cụm (Cluster Profiles):**")
+                                st.markdown("**Cluster Profiles**")
                                 # Format data cho dễ nhìn trên UI
                                 display_profiles = cluster_profiles.copy()
                                 display_profiles['% of Data'] = display_profiles['% of Data'].apply(lambda x: f"{x:.1f}%")
@@ -1350,7 +1350,7 @@ elif active_page == "📊 Data Exploration":
                                 fig_cluster, ax_cluster = plt.subplots(figsize=(8, 5))
                                 heatmap_data = cluster_profiles.set_index('Cluster')[['B2B_binary', 'fulfillment_binary', 'Status_binary', 'size_ordinal']]
                                 sns.heatmap(heatmap_data, annot=True, cmap='Blues', fmt=".2f", cbar=True, ax=ax_cluster)
-                                ax_cluster.set_title('Bản đồ Nhiệt: Đặc trưng các Cụm', fontsize=12, fontweight='bold')
+                                ax_cluster.set_title('Heatmap: Đặc trưng các Clusters', fontsize=12, fontweight='bold')
                                 ax_cluster.set_ylabel('Cluster ID')
                                 st.pyplot(fig_cluster)
                                 plt.close(fig_cluster)
