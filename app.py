@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from sqlalchemy import create_engine
 import google.generativeai as genai
+from sklearn.preprocessing import LabelEncoder
+from sklearn.feature_selection import mutual_info_classif
 # Set trang hiển thị full màn hình cho giống giao diện web thật
 st.set_page_config(page_title="Amazon Predictor", layout="wide")
 
@@ -911,51 +913,193 @@ elif active_page == "📊 Data Exploration":
     # 2) BIỂU ĐỒ (BOXPLOT)
     # ======================
         else:
-            st.subheader("📈 Biểu đồ: Amount (tiền) theo Category (Boxplot)")
+            st.subheader("📈 Khám phá dữ liệu nâng cao (EDA Analytics)")
+            st.caption("Khu vực này thực hiện các tính toán nặng (Pearson Correlation, Mutual Information). Bấm nút bên dưới để bắt đầu phân tích.")
+            
+            # Đảm bảo có Status_binary để tính toán
+            work_df = df.copy()
+            if "Status_binary" not in work_df.columns and "Status" in work_df.columns:
+                bad_markers = ("cancelled", "rejected", "returned", "return")
+                work_df["Status_binary"] = work_df["Status"].astype(str).str.lower().apply(
+                    lambda x: 0 if any(m in x for m in bad_markers) else 1
+                )
 
-            if "Category" not in df.columns or "Amount" not in df.columns:
-                st.error("Cần có cột `Category` và `Amount` trong file CSV.")
-                st.stop()
+            # Nút Trigger
+            run_charts = st.button("🚀 RUN CHART", type="primary", use_container_width=True)
 
-            with eda_nav_col:
-                with st.container(border=True):
-                    st.markdown("#### ⚙️ Tùy chỉnh biểu đồ")
-                    show_fliers = st.checkbox("Hiện outliers", value=False, key="eda_show_fliers")
+            if run_charts:
+                with st.spinner("Đang xử lý dữ liệu và vẽ biểu đồ. Vui lòng đợi (có thể mất vài giây)..."):
+                    
+                    # ---------------------------------------------------------
+                    # TEXT METRICS (Thay cho các lệnh print)
+                    # ---------------------------------------------------------
+                    st.markdown("### 📌 Thông tin tổng quan")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Số States (Tỉnh/Bang)", work_df['ship-state'].nunique() if 'ship-state' in work_df.columns else 0)
+                    c2.metric("Số Cities (Thành phố)", work_df['ship-city'].nunique() if 'ship-city' in work_df.columns else 0)
+                    c3.metric("Số đơn B2B", int(work_df['B2B_binary'].sum()) if 'B2B_binary' in work_df.columns else 0)
 
-            work = df[["Category", "Amount"]].dropna()
-            work = work[work["Amount"].apply(lambda x: isinstance(x, (int, float, np.number)))]
+                    s_col1, s_col2 = st.columns([1, 1])
+                    with s_col1:
+                        st.markdown("**Tỷ lệ thành công theo Size:**")
+                        if 'size_ordinal' in work_df.columns:
+                            size_success = work_df.groupby('size_ordinal')['Status_binary'].mean().reset_index()
+                            size_success.columns = ['Size Ordinal', 'Tỷ lệ thành công']
+                            st.dataframe(size_success, hide_index=True, use_container_width=True)
+                    
+                    with s_col2:
+                        st.markdown("**Số lượng đơn theo các size đặc biệt:**")
+                        if 'size_ordinal' in work_df.columns:
+                            s8 = work_df[work_df['size_ordinal'] == 8].shape[0]
+                            s9 = work_df[work_df['size_ordinal'] == 9].shape[0]
+                            s10 = work_df[work_df['size_ordinal'] == 10].shape[0]
+                            st.info(f"Size 8 (4XL): **{s8}** đơn\n\nSize 9 (5XL): **{s9}** đơn\n\nSize 10 (6XL): **{s10}** đơn")
 
-            if work.empty:
-                st.warning("Không đủ dữ liệu hợp lệ để vẽ boxplot.")
-                st.stop()
+                    st.divider()
 
-            ordered_categories = work["Category"].value_counts().index.tolist()
-            filtered = work[work["Category"].isin(ordered_categories)]
-            grouped = [filtered.loc[filtered["Category"] == c, "Amount"].values for c in ordered_categories]
+                    # ---------------------------------------------------------
+                    # PLOT 1: 2x2 Grid Tổng quan
+                    # ---------------------------------------------------------
+                    st.markdown("### 📊 Tổng quan Kinh doanh (2x2 Grid)")
+                    
+                    # Xử lý Date an toàn hơn một chút
+                    if 'Date' in work_df.columns:
+                        work_df['Date'] = pd.to_datetime(work_df['Date'], errors='coerce')
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Số category", f"{len(ordered_categories)}")
-            m2.metric("Số mẫu (filtered)", f"{len(filtered):,}")
-            m3.metric("Median Amount (all)", f"{work['Amount'].median():.2f}")
+                    fig1, axes = plt.subplots(2, 2, figsize=(16, 12))
+                    sns.set_theme(style="whitegrid")
 
-            fig, ax = plt.subplots(figsize=(11.0, 5.2))
-            bp = ax.boxplot(
-                grouped,
-                labels=ordered_categories,
-                showfliers=show_fliers,
-                patch_artist=True,
-            )
-            for box in bp["boxes"]:
-                box.set(facecolor="#1E88E5", alpha=0.25, edgecolor="#1E88E5")
-            for med in bp["medians"]:
-                med.set(color="#1565C0", linewidth=2)
+                    # 1. Average Price: B2B vs Non-B2B
+                    if 'B2B_binary' in work_df.columns and 'Amount' in work_df.columns:
+                        avg_price_b2b = work_df.groupby('B2B_binary')['Amount'].mean().reset_index()
+                        avg_price_b2b['B2B_Type'] = avg_price_b2b['B2B_binary'].map({0: 'Regular Customer', 1: 'B2B (Business)'})
+                        sns.barplot(x='B2B_Type', y='Amount', data=avg_price_b2b, ax=axes[0, 0], palette='Blues_d')
+                        axes[0, 0].set_title('1. Average Order Amount (B2B vs Regular)', fontsize=14, fontweight='bold')
+                        axes[0, 0].set_ylabel('Average Amount (INR)', fontsize=12)
+                        axes[0, 0].set_xlabel('')
+                        for i, v in enumerate(avg_price_b2b['Amount']):
+                            axes[0, 0].text(i, v + 5, f'₹{v:.2f}', ha='center', fontsize=12, fontweight='bold')
 
-            ax.set_title("Amount (tiền) theo Category", fontsize=12)
-            ax.set_xlabel("Category")
-            ax.set_ylabel("Amount (INR)")
-            ax.grid(axis="y", linestyle="--", alpha=0.25)
-            plt.setp(ax.get_xticklabels(), rotation=20, ha="right")
-            st.pyplot(fig, clear_figure=True, use_container_width=True)
+                    # 2. Average Success Rate by Category
+                    if 'Category' in work_df.columns:
+                        overall_success = work_df['Status_binary'].mean() * 100
+                        cat_success = work_df.groupby('Category')['Status_binary'].mean().reset_index()
+                        cat_success['Success Rate (%)'] = cat_success['Status_binary'] * 100
+                        cat_success = cat_success.sort_values(by='Success Rate (%)', ascending=False)
+                        sns.barplot(x='Success Rate (%)', y='Category', data=cat_success, ax=axes[0, 1], palette='Greens_r')
+                        axes[0, 1].set_title(f'2. Success Rate by Top Categories\n(Overall Average: {overall_success:.1f}%)', fontsize=14, fontweight='bold')
+                        axes[0, 1].set_xlabel('Success Rate (%)', fontsize=12)
+                        axes[0, 1].set_ylabel('')
+                        axes[0, 1].set_xlim(0, 100)
+                        for i, v in enumerate(cat_success['Success Rate (%)']):
+                            axes[0, 1].text(v - 8, i, f'{v:.1f}%', va='center', color='white', fontweight='bold')
+                    else:
+                        axes[0, 1].set_title('2. Average Success Rate by Category (N/A)', fontsize=14, fontweight='bold')
+                        axes[0, 1].text(0.5, 0.5, "Column 'Category' not found.", ha='center', va='center', fontsize=12, color='red')
+
+                    # 3. Monthly Sales Revenue Trend
+                    if 'Date' in work_df.columns and 'Amount' in work_df.columns:
+                        work_df['Month_Year'] = work_df['Date'].dt.to_period('M').astype(str)
+                        monthly_sales = work_df.dropna(subset=['Month_Year']).groupby('Month_Year')['Amount'].sum().reset_index()
+                        monthly_sales = monthly_sales.sort_values('Month_Year')
+                        sns.lineplot(x='Month_Year', y='Amount', data=monthly_sales, ax=axes[1, 0], marker='o', color='purple', linewidth=2.5, markersize=8)
+                        axes[1, 0].set_title('3. Total Sales Revenue Over Time', fontsize=14, fontweight='bold')
+                        axes[1, 0].set_xlabel('Month', fontsize=12)
+                        axes[1, 0].set_ylabel('Total Revenue (INR)', fontsize=12)
+                        axes[1, 0].tick_params(axis='x', rotation=45)
+                        axes[1, 0].yaxis.set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}M".format(x/1e6)))
+
+                    # 4. Top 10 States by Order Count
+                    if 'ship-state' in work_df.columns:
+                        top_states = work_df['ship-state'].value_counts().nlargest(10).reset_index()
+                        top_states.columns = ['State', 'Total Orders']
+                        sns.barplot(x='Total Orders', y='State', data=top_states, ax=axes[1, 1], palette='rocket')
+                        axes[1, 1].set_title('4. Top 10 States by Order Volume', fontsize=14, fontweight='bold')
+                        axes[1, 1].set_xlabel('Total Orders', fontsize=12)
+                        axes[1, 1].set_ylabel('')
+
+                    plt.tight_layout()
+                    st.pyplot(fig1)
+                    plt.close(fig1) # Đóng fig để tránh rò rỉ bộ nhớ của Streamlit
+
+                    st.divider()
+
+                    # ---------------------------------------------------------
+                    # PLOT 2: Mutual Information (Categorical)
+                    # ---------------------------------------------------------
+                    st.markdown("### 🧠 Feature Importance: Mutual Information (Categorical)")
+                    cat_cols = ['ship-state', 'Courier Status', 'Category', 'Sales Channel ', 'ship-city', 'Style', 'SKU']
+                    existing_cat_cols = [col for col in cat_cols if col in work_df.columns]
+                    
+                    if existing_cat_cols:
+                        sample_df = work_df[['Status_binary'] + existing_cat_cols].copy().dropna(subset=['Status_binary']).sample(n=min(20000, len(work_df)), random_state=42)
+                        le = LabelEncoder()
+                        for col in existing_cat_cols:
+                            sample_df[col] = sample_df[col].fillna('Unknown')
+                            sample_df[col] = le.fit_transform(sample_df[col].astype(str))
+
+                        X = sample_df[existing_cat_cols]
+                        y = sample_df['Status_binary']
+                        
+                        mi_scores_cat = mutual_info_classif(X, y, random_state=42)
+                        mi_series_cat = pd.Series(mi_scores_cat, index=X.columns).sort_values(ascending=False)
+
+                        fig2, ax2 = plt.subplots(figsize=(10, 6))
+                        sns.barplot(x=mi_series_cat.values, y=mi_series_cat.index, palette='rocket', ax=ax2)
+                        ax2.set_title('Mutual Information with Target (Categorical Columns)', fontsize=14)
+                        ax2.set_xlabel('MI Score (Importance)', fontsize=12)
+                        ax2.set_ylabel('Features', fontsize=12)
+                        ax2.grid(axis='x', linestyle='--', alpha=0.7)
+                        
+                        plt.tight_layout()
+                        st.pyplot(fig2)
+                        plt.close(fig2)
+                    else:
+                        st.warning("Không tìm thấy các cột Categorical để tính toán MI.")
+
+                    st.divider()
+
+                    # ---------------------------------------------------------
+                    # PLOT 3: Pearson vs Mutual Information (Numerical)
+                    # ---------------------------------------------------------
+                    st.markdown("### 🔍 Correlation vs Mutual Information (Numerical)")
+                    features = ['Qty', 'Amount', 'fulfillment_binary', 'ship_premium', 'size_ordinal', 'B2B_binary', 'promotion']
+                    existing_num_cols = [col for col in features if col in work_df.columns]
+
+                    if existing_num_cols:
+                        # Pearson
+                        corr_matrix = work_df[['Status_binary'] + existing_num_cols].corr()
+                        pearson_corr = corr_matrix['Status_binary'].drop('Status_binary').sort_values(ascending=False)
+
+                        # MI
+                        sample_df_num = work_df[['Status_binary'] + existing_num_cols].dropna().sample(n=min(20000, len(work_df)), random_state=42)
+                        X_num = sample_df_num[existing_num_cols]
+                        y_num = sample_df_num['Status_binary']
+                        
+                        mi_scores_num = mutual_info_classif(X_num, y_num, random_state=42)
+                        mi_series_num = pd.Series(mi_scores_num, index=X_num.columns).sort_values(ascending=False)
+
+                        fig3, axes3 = plt.subplots(1, 2, figsize=(15, 6))
+
+                        # Plot 1: Pearson
+                        sns.barplot(x=pearson_corr.values, y=pearson_corr.index, ax=axes3[0], palette='viridis')
+                        axes3[0].set_title('Pearson Correlation with Target', fontsize=14)
+                        axes3[0].set_xlabel('Correlation Coefficient', fontsize=12)
+                        axes3[0].set_ylabel('Features', fontsize=12)
+                        axes3[0].grid(axis='x', linestyle='--', alpha=0.7)
+
+                        # Plot 2: MI
+                        sns.barplot(x=mi_series_num.values, y=mi_series_num.index, ax=axes3[1], palette='magma')
+                        axes3[1].set_title('Mutual Information Scores with Target', fontsize=14)
+                        axes3[1].set_xlabel('MI Score', fontsize=12)
+                        axes3[1].set_ylabel('')
+                        axes3[1].grid(axis='x', linestyle='--', alpha=0.7)
+
+                        plt.tight_layout()
+                        st.pyplot(fig3)
+                        plt.close(fig3)
+                    else:
+                        st.warning("Không tìm thấy các cột Numerical để tính toán.")
 
 # ----------------------------------------------------------------------
 # TAB 3: PROJECT ASSISTANT (CHATBOT)
