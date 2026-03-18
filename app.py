@@ -8,6 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from datetime import datetime
 from sqlalchemy import create_engine
+import google.generativeai as genai
 # Set trang hiển thị full màn hình cho giống giao diện web thật
 st.set_page_config(page_title="Amazon Predictor", layout="wide")
 
