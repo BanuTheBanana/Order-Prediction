@@ -300,7 +300,7 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str,
             st.markdown("##### 1. Thông tin cơ bản")
             c1, c2 = st.columns(2)
             with c1:
-                st.number_input(
+                amount_input = st.number_input(
                     "💸 Giá trị đơn hàng (INR)",
                     min_value=0.0,
                     value=float(amount),
@@ -419,12 +419,12 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str,
                     success_prob = float(model.predict_proba(input_data)[0][1])
                     success_prob_pct = success_prob * 100
 
-                    if success_prob < 0.5:
-                        risk_text = "Khả năng thành công thấp. Cần cân nhắc/kiểm tra thêm điều kiện đơn hàng."
+                    if success_prob < 0.65:
+                        risk_text = "Khả năng thành công thấp. Cần cân nhắc/kiểm tra thêm điều kiện đơn hàng. Gửi mail confirm đơn hàng + mã giảm giá cho khách."
                         delta_text = "Thấp"
                         delta_color = "inverse"
-                    elif success_prob < 0.7:
-                        risk_text = "Khả năng thành công trung bình. Nên theo dõi thêm."
+                    elif success_prob < 0.8:
+                        risk_text = "Khả năng thành công trung bình. Nên theo dõi thêm. Gửi mail confirm đơn hàng."
                         delta_text = "Trung bình"
                         delta_color = "off"
                     else:
