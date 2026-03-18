@@ -1260,16 +1260,108 @@ elif active_page == "📊 Data Exploration":
                     st.divider()
 
                     # ---------------------------------------------------------
-                    # PLOT 1: 2x2 Grid Tổng quan (Giữ nguyên code cũ của bạn từ đây)
+                    # INSIGHT KHÁCH HÀNG: B2B vs KHÁCH LẺ (Regular)
                     # ---------------------------------------------------------
-                    st.markdown("### 📊 Tổng quan Kinh doanh (2x2 Grid)")
-                    
-                    # Xử lý Date an toàn hơn một chút
-                    if 'Date' in work_df.columns:
-                        work_df['Date'] = pd.to_datetime(work_df['Date'], errors='coerce')
+                    st.markdown("### 🏢 Phân tích Khách hàng: Doanh nghiệp (B2B) vs Khách lẻ")
+                    if 'B2B_binary' in work_df.columns and 'Status_binary' in work_df.columns and 'Amount' in work_df.columns:
+                        b2b_col1, b2b_col2 = st.columns([1, 1.5])
 
-                    fig1, axes = plt.subplots(2, 2, figsize=(16, 12))
-                    sns.set_theme(style="whitegrid")
+                        b2b_data = work_df.groupby('B2B_binary').agg(
+                            Số_Đơn=('Order ID', 'count'),
+                            Tổng_Doanh_Thu=('Amount', 'sum'),
+                            Tỷ_Lệ_Thành_Công=('Status_binary', lambda x: x.mean() * 100)
+                        ).reset_index()
+
+                        b2b_data['Loại_Khách_Hàng'] = b2b_data['B2B_binary'].map({0: 'Khách Lẻ (Regular)', 1: 'Doanh Nghiệp (B2B)'})
+                        b2b_data['AOV (Giá trị TB)'] = b2b_data['Tổng_Doanh_Thu'] / b2b_data['Số_Đơn']
+
+                        with b2b_col1:
+                            st.markdown("**So sánh các chỉ số cốt lõi:**")
+                            display_b2b = b2b_data[['Loại_Khách_Hàng', 'Số_Đơn', 'AOV (Giá trị TB)', 'Tỷ_Lệ_Thành_Công']].copy()
+                            display_b2b['AOV (Giá trị TB)'] = display_b2b['AOV (Giá trị TB)'].apply(lambda x: f"₹ {x:,.0f}")
+                            display_b2b['Tỷ_Lệ_Thành_Công'] = display_b2b['Tỷ_Lệ_Thành_Công'].apply(lambda x: f"{x:.2f}%")
+                            st.dataframe(display_b2b, hide_index=True, use_container_width=True)
+
+                            st.info("💡 **Business Insight:** Khách hàng B2B thường có hành vi mua sắm rất khác biệt. Dù chiếm tỷ trọng nhỏ, họ có thể mang lại Giá trị đơn hàng (AOV) cao hơn hoặc tỷ lệ cam kết nhận hàng tốt hơn khách lẻ.")
+
+                        with b2b_col2:
+                            fig_b2b, ax_b2b = plt.subplots(figsize=(7, 3.5))
+                            sns.barplot(x='Loại_Khách_Hàng', y='Tỷ_Lệ_Thành_Công', data=b2b_data, palette='rocket', ax=ax_b2b)
+                            ax_b2b.set_title('Tỷ lệ Thành Công: B2B vs Khách Lẻ', fontsize=12, fontweight='bold')
+                            ax_b2b.set_ylabel('Tỷ lệ thành công (%)')
+                            ax_b2b.set_xlabel('')
+                            ax_b2b.set_ylim(0, 100)
+                            for i, v in enumerate(b2b_data['Tỷ_Lệ_Thành_Công']):
+                                ax_b2b.text(i, v - 10 if v > 20 else v + 5, f'{v:.1f}%', ha='center', color='white' if v > 20 else 'black', fontweight='bold')
+                            st.pyplot(fig_b2b)
+                            plt.close(fig_b2b)
+                    else:
+                        st.caption("Thiếu dữ liệu (B2B_binary, Status_binary, Amount) để phân tích B2B.")
+
+                    st.divider()
+
+                    # ---------------------------------------------------------
+                    # CLUSTERING: K-MEANS PHÂN CỤM ĐƠN HÀNG
+                    # ---------------------------------------------------------
+                    st.markdown("### 🤖 Máy học Không giám sát: Phân cụm Đơn hàng (K-Means)")
+                    features_to_cluster = ['Amount', 'fulfillment_binary', 'B2B_binary', 'size_ordinal']
+                    missing_cols = [c for c in features_to_cluster if c not in work_df.columns]
+
+                    if not missing_cols and 'Status_binary' in work_df.columns:
+                        from sklearn.cluster import KMeans
+                        from sklearn.preprocessing import StandardScaler
+
+                        # Lọc bỏ giá trị rỗng trước khi đưa vào thuật toán clustering để tránh lỗi
+                        cluster_df = work_df[features_to_cluster + ['Status_binary']].dropna().copy()
+
+                        if len(cluster_df) > 10: 
+                            X_cluster = cluster_df[features_to_cluster].copy()
+
+                            # 1. Scale data (Giữ Amount không làm lu mờ các binary features)
+                            scaler = StandardScaler()
+                            X_scaled = scaler.fit_transform(X_cluster)
+
+                            # 2. Run K-Means with 3 clusters
+                            kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+                            cluster_df['Cluster'] = kmeans.fit_predict(X_scaled)
+
+                            # 3. Analyze the Profiles
+                            cluster_profiles = cluster_df.groupby('Cluster')[features_to_cluster + ['Status_binary']].mean().reset_index()
+
+                            # Tính toán % dung lượng của từng Cluster
+                            cluster_counts = cluster_df['Cluster'].value_counts(normalize=True).sort_index() * 100
+                            cluster_profiles['% of Data'] = cluster_counts.values
+
+                            clu_col1, clu_col2 = st.columns([1.1, 1.4])
+
+                            with clu_col1:
+                                st.markdown("**Đặc tả các cụm (Cluster Profiles):**")
+                                # Format data cho dễ nhìn trên UI
+                                display_profiles = cluster_profiles.copy()
+                                display_profiles['% of Data'] = display_profiles['% of Data'].apply(lambda x: f"{x:.1f}%")
+                                display_profiles['Status_binary'] = display_profiles['Status_binary'].apply(lambda x: f"{(x*100):.1f}%")
+                                display_profiles['Amount'] = display_profiles['Amount'].apply(lambda x: f"₹ {x:,.0f}")
+                                
+                                st.dataframe(display_profiles.round(2), hide_index=True, use_container_width=True)
+                                st.caption("🔍 **Hướng dẫn đọc:** So sánh cột `% of Data` (quy mô cụm) và `Status_binary` (tỷ lệ thành công) để tìm ra nhóm khách hàng mang lại rủi ro hủy đơn cao nhất.")
+
+                            with clu_col2:
+                                # 4. Visualize heatmap đặc trưng các cụm
+                                fig_cluster, ax_cluster = plt.subplots(figsize=(8, 5))
+                                heatmap_data = cluster_profiles.set_index('Cluster')[['B2B_binary', 'fulfillment_binary', 'Status_binary', 'size_ordinal']]
+                                sns.heatmap(heatmap_data, annot=True, cmap='Blues', fmt=".2f", cbar=True, ax=ax_cluster)
+                                ax_cluster.set_title('Bản đồ Nhiệt: Đặc trưng các Cụm', fontsize=12, fontweight='bold')
+                                ax_cluster.set_ylabel('Cluster ID')
+                                st.pyplot(fig_cluster)
+                                plt.close(fig_cluster)
+                        else:
+                            st.warning("Không đủ dữ liệu hợp lệ (sau khi loại bỏ giá trị rỗng) để chạy thuật toán K-Means.")
+                    else:
+                        st.caption(f"Không thể chạy phân cụm do thiếu các cột: {', '.join(missing_cols)} hoặc Status_binary.")
+
+                    st.divider()
+                    
+                    # (TIẾP TỤC VỚI PLOT 1: 2x2 Grid Tổng quan ở code cũ của bạn)
 
 # ----------------------------------------------------------------------
 # TAB 3: PROJECT ASSISTANT (CHATBOT)
