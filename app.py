@@ -1174,6 +1174,102 @@ elif active_page == "📊 Data Exploration":
                         plt.close(fig3)
                     else:
                         st.warning("Không tìm thấy các cột Numerical để tính toán.")
+                        # ---------------------------------------------------------
+                    # TEXT METRICS & BẢNG THỐNG KÊ (Mới thêm)
+                    # ---------------------------------------------------------
+                    st.markdown("### 📌 Thông tin tổng quan")
+                    
+                    # Tính toán tổng doanh thu và AOV (Average Order Value)
+                    total_revenue = work_df['Amount'].sum() if 'Amount' in work_df.columns else 0
+                    aov = work_df['Amount'].mean() if 'Amount' in work_df.columns else 0
+
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Tổng Doanh Thu (INR)", f"₹ {total_revenue:,.0f}")
+                    c2.metric("Giá Trị Đơn TB (AOV)", f"₹ {aov:,.0f}")
+                    c3.metric("Số States (Tỉnh/Bang)", work_df['ship-state'].nunique() if 'ship-state' in work_df.columns else 0)
+                    c4.metric("Số đơn B2B", int(work_df['B2B_binary'].sum()) if 'B2B_binary' in work_df.columns else 0)
+
+                    st.divider()
+
+                    # ---------------------------------------------------------
+                    # BẢNG THỐNG KÊ DOANH THU (Tháng & Danh mục)
+                    # ---------------------------------------------------------
+                    st.markdown("### 💰 Thống kê chi tiết Doanh Thu")
+                    rev_col1, rev_col2 = st.columns(2)
+
+                    with rev_col1:
+                        st.markdown("**1. Hiệu suất theo Tháng:**")
+                        if 'Date' in work_df.columns and 'Amount' in work_df.columns:
+                            work_df['Month_Year'] = pd.to_datetime(work_df['Date'], errors='coerce').dt.to_period('M').astype(str)
+                            monthly_rev = work_df.groupby('Month_Year').agg(
+                                Tổng_Doanh_Thu=('Amount', 'sum'),
+                                Số_Đơn_Hàng=('Order ID', 'count')
+                            ).reset_index()
+                            # Format tiền tệ cho đẹp
+                            monthly_rev_display = monthly_rev.copy()
+                            monthly_rev_display['Tổng_Doanh_Thu'] = monthly_rev_display['Tổng_Doanh_Thu'].apply(lambda x: f"₹ {x:,.0f}")
+                            st.dataframe(monthly_rev_display, hide_index=True, use_container_width=True)
+
+                    with rev_col2:
+                        st.markdown("**2. Doanh thu theo Danh mục (Category):**")
+                        if 'Category' in work_df.columns and 'Amount' in work_df.columns:
+                            cat_rev = work_df.groupby('Category').agg(
+                                Tổng_Doanh_Thu=('Amount', 'sum'),
+                                Tỷ_Lệ_Thành_Công=('Status_binary', lambda x: f"{(x.mean() * 100):.1f}%")
+                            ).reset_index()
+                            cat_rev = cat_rev.sort_values(by='Tổng_Doanh_Thu', ascending=False)
+                            cat_rev['Tổng_Doanh_Thu'] = cat_rev['Tổng_Doanh_Thu'].apply(lambda x: f"₹ {x:,.0f}")
+                            st.dataframe(cat_rev, hide_index=True, use_container_width=True)
+
+                    st.divider()
+
+                    # ---------------------------------------------------------
+                    # INSIGHT VẬN HÀNH: AMAZON VS MERCHANT
+                    # ---------------------------------------------------------
+                    st.markdown("### 🚚 Phân tích rủi ro Vận Hành (Fulfillment Insights)")
+                    if 'Fulfilment' in work_df.columns and 'Status_binary' in work_df.columns:
+                        ff_col1, ff_col2 = st.columns([1, 1.5])
+                        
+                        ff_data = work_df.groupby('Fulfilment').agg(
+                            Số_Đơn=('Order ID', 'count'),
+                            Thành_Công=('Status_binary', 'sum')
+                        ).reset_index()
+                        ff_data['Tỷ_Lệ_Thành_Công_Vận_Chuyển'] = (ff_data['Thành_Công'] / ff_data['Số_Đơn']) * 100
+                        
+                        with ff_col1:
+                            st.markdown("**Thống kê Fulfillment:**")
+                            display_ff = ff_data[['Fulfilment', 'Số_Đơn', 'Tỷ_Lệ_Thành_Công_Vận_Chuyển']].copy()
+                            display_ff['Tỷ_Lệ_Thành_Công_Vận_Chuyển'] = display_ff['Tỷ_Lệ_Thành_Công_Vận_Chuyển'].apply(lambda x: f"{x:.2f}%")
+                            st.dataframe(display_ff, hide_index=True, use_container_width=True)
+                            st.info("💡 **Business Insight:** Sự chênh lệch tỷ lệ thành công giữa Amazon và Merchant là rất lớn. Đây là rủi ro chính dẫn đến hủy đơn cần được can thiệp sớm.")
+
+                        with ff_col2:
+                            fig_ff, ax_ff = plt.subplots(figsize=(7, 3.5))
+                            sns.barplot(x='Tỷ_Lệ_Thành_Công_Vận_Chuyển', y='Fulfilment', data=ff_data, palette='Set2', ax=ax_ff)
+                            ax_ff.set_title('Tỷ lệ Giao Hàng Thành Công (Amazon vs Merchant)', fontsize=12, fontweight='bold')
+                            ax_ff.set_xlabel('Tỷ lệ thành công (%)')
+                            ax_ff.set_ylabel('')
+                            ax_ff.set_xlim(0, 100)
+                            for i, v in enumerate(ff_data['Tỷ_Lệ_Thành_Công_Vận_Chuyển']):
+                                ax_ff.text(v - 8 if v > 15 else v + 2, i, f'{v:.1f}%', va='center', color='white' if v > 15 else 'black', fontweight='bold')
+                            st.pyplot(fig_ff)
+                            plt.close(fig_ff)
+                    else:
+                        st.caption("Không tìm thấy cột 'Fulfilment' để phân tích vận hành.")
+
+                    st.divider()
+
+                    # ---------------------------------------------------------
+                    # PLOT 1: 2x2 Grid Tổng quan (Giữ nguyên code cũ của bạn từ đây)
+                    # ---------------------------------------------------------
+                    st.markdown("### 📊 Tổng quan Kinh doanh (2x2 Grid)")
+                    
+                    # Xử lý Date an toàn hơn một chút
+                    if 'Date' in work_df.columns:
+                        work_df['Date'] = pd.to_datetime(work_df['Date'], errors='coerce')
+
+                    fig1, axes = plt.subplots(2, 2, figsize=(16, 12))
+                    sns.set_theme(style="whitegrid")
 
 # ----------------------------------------------------------------------
 # TAB 3: PROJECT ASSISTANT (CHATBOT)
