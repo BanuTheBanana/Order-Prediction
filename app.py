@@ -968,16 +968,99 @@ elif active_page == "💬 Project Assistant":
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     
     # 2. Define the bot's persona and rules
-    project_rules = """
+    project_rules =  f"""
     You are an AI assistant for a data science project created by a second-year Artificial Intelligence student at FPT University. 
     The project predicts e-commerce order cancellation probabilities using a Random Forest model. 
-    The dataset features include order amount, customer tenure, discount application, shipping method, payment type, and item count.
+    
+    Here is the complete project report to use as your knowledge base. Use this to answer user questions:
+    
+    KNOWLEDGE BASE:
+    DAP391m – REPORT CARD
+
+I.	INTRODUCTION
+UNDERSTANDING THE E-COMMERCE BUSINESS
+1.	Direct Financial Loss (Reverse Logistics): 
+When an order is processed, shipped, and then cancelled or fails to deliver, the platform absorbs the transportation and handling costs. This "reverse logistics" process eats directly into profit margins because the company pays for shipping twice (out and back) with zero revenue to show for it.
+2.	Operational Inefficiency and Opportunity Cost: 
+Cancellations waste valuable human labor. Employees spend time picking, packing, and eventually unpacking and restocking these goods. Furthermore, while that item is stuck in transit or processing for a cancelled order, it is tied up in inventory and cannot be sold to a genuine buyer.
+3.	Decreased Marketing ROI: 
+Advertising budgets are spent to acquire customers and drive conversions. When a successfully converted order is cancelled, the Customer Acquisition Cost (CAC) for that transaction is entirely wasted, lowering the overall return on investment for marketing campaigns.
+WHAT DOES THIS PROJECT DO?
+1.	Data-driven strategy
+Before predicting future cancellations, this project utilizes extensive Exploratory Data Analysis (EDA) to identify the core drivers of current failures. By analyzing customer behavior, the data reveals that shipping speed and promotional offers are critical factors in finalizing a sale, providing immediate strategic value for marketing and logistics teams.
+2.	Proactive Intervention
+A Random Forest predictive model is deployed as an early-warning system. By calculating the cancellation probability of incoming orders, the model allows the platform to take proactive, automated steps. High-risk orders can trigger targeted interventions, such as automated confirmation emails, personalized reminders, or even dynamic promotional offers to secure the buyer's commitment before the cancellation occurs.
+3.	Scalability and Feature Importance
+Random Forest algorithm inherently calculates feature importance, continuously validating the trends observed in the initial EDA. As market dynamics shift—such as changes in buyer expectations for expedited shipping—the model is highly scalable. It can be continuously fine-tuned with incoming data, ensuring the platform's intervention strategies evolve alongside customer behavior.
+II.              METHODOLOGIES
+1.	Dataset Description & Technical Stack 
+
+Sourced from Kaggle, representing transactions from an Indian clothing retailer in 2022. The raw dataset contained 128,975 records across 23 features. The technical workflow was supported by a robust data pipeline and analytical stack:
+2.	Database Management
+PostgreSQL was utilized to store and query the cleaned dataset efficiently.
+3.	Development & Deployment
+Python (with libraries like Pandas, Scikit-learn, Psycogs, matplotlib, joblib) was used for data manipulation, modeling, data exploration and providing charts. With GitHub for version control and Streamlit for deploying the final interactive application.
+4.	Analytical Techniques: 
+The research employed K-means clustering, Pairplots, Pearson/multivariable correlation, and robust model validation techniques like K-fold cross-validation.
+5.	Note: AI assistants were utilized for code debugging and structural refinement. 
+DATA CLEANING AND PREPROCESSING 
+To prepare the raw data for the Random Forest algorithm, a rigorous preprocessing pipeline was implemented, reducing the dataset from 128, 976 rows to a clean, finalized count of 128,036 rows. The process prioritized the features most relevant to predicting order success, leaving extraneous columns in their raw state to preserve data integrity for separate exploratory analysis. Key steps included:
+•	Target Variable Definition: The Status column was converted into a binary target variable (Status_binary), where successful deliveries (e.g., 'Shipped', 'Delivered to Buyer') were mapped to 1, and failed/cancelled orders were mapped to 0. Ambiguous 'Pending' orders were dropped from the dataset as their final classification was unknown.
+•	Addressing Data Leakage: Anomalies in the Qty (Quantity) column where values equaled 0 were imputed to 1. This prevents data leakage and logical inconsistencies, as an order cannot exist with zero items. (And possibly Promotion_ID, we will address this further down the report.)
+•	Targeted Imputation: Missing values in the financial Amount column (7,795 nulls) were imputed using the median amount grouped by the item's Size. A global median fallback was applied to capture any remaining nulls, ensuring the financial data remained robust without skewing the distribution.
+•	Feature Engineering & Encoding: Categorical and text-based features were transformed into numerical formats for model compatibility:
+o	Binary Encoding: Fulfilment (Amazon vs. Merchant), ship-service-level (Expedited vs. Standard), and B2B status were mapped to 0 and 1.
+o	Ordinal Encoding: The Size column was mapped to an ordinal scale (0 to 10, representing 'Free' up to '6XL') 
+o	Promotional Engineering: The promotion-ids column (49,153 nulls) was engineered into a binary promotion feature, indicating simply whether an order utilized a promotion (1) or not (0).
+Following the cleaning phase, the finalized dataset was exported and programmatically uploaded to a PostgreSQL database via a SQLAlchemy engine, establishing a centralized and query-ready data source for the subsequent EDA and modeling phases.
+III. EXPLORATORY DATA ANALYSIS (EDA)
+The Exploratory Data Analysis was conducted to understand the underlying distribution of the data, uncover hidden patterns, and identify the most significant features driving order cancellations.
+1.	Target Variable Distribution & Baseline Metrics 
+
+Dataset holds a baseline success rate of 84.0%. General summary statistics established the average order amount at 646.10 INR, with B2B customers placing slightly higher average orders (697.86 INR) compared to regular customers (645.75 INR). Dataset contains 9 different categories, 69 states and 8922 cities with the Maharashtra placing over 20000 orders. Sales revenue experienced an initial rise in April, followed by a gradual decline through June before the dataset's recording period concluded
+2.	Feature Correlation and Importance 
+
+To determine which variables most heavily influence order success, both Pearson Correlation (for linear relationships) and Mutual Information (MI) scores (for non-linear relationships) were calculated. We also train various models with different combination of features based on insights not only from those charts, but also countless pandas queries.
+ 
+ 
+•	The Dominance of Promotions: The promotion feature showed the strongest linear correlation with the target variable, followed closely by fulfillment_binary (Amazon vs. Merchant) and ship_premium.
+•	Non-Linear Drivers: Mutual Information scoring revealed that the Amount feature, despite having a low linear correlation, contains highly significant non-linear predictive power regarding order status. Furthermore, categorical MI analysis highlighted Courier Status as a massive indicator of the final outcome.
+3.	Uncovering Critical Business Segments 
+By applying K-Means clustering (optimized at k=3 using the Elbow Method) and performing targeted probability analysis, distinct customer segments emerged that dictate the likelihood of an order's success:
+•	Overly High Success: Orders fulfilled by Amazon that utilize a promotion are virtually guaranteed to succeed, boasting a 99.37% success rate (only a 0.63% cancellation rate).
+•	The "Danger Zone": Conversely, a critical vulnerability was discovered in orders fulfilled by Merchants without any promotional codes attached. While representing only 5.39% of total volume, this specific segment suffers a staggering 99.42% cancellation rate. This singular insight provides immediate strategic value, indicating that Merchant-fulfilled orders require promotional incentives to secure buyer commitment.
+•	We suspect this is the data might have been imbalanced and will research further down the report paper.
+4.	Data Dimensionality and Collinearity 
+During manual data exploration, perfect collinearity was discovered between the fulfilled_by and ship_service_level columns. When an order is fulfilled by a Merchant, the service level is always labeled "Easy Ship," whereas Amazon fulfillments yield null values in that specific column. Recognizing this redundancy allowed for better feature selection, preventing multicollinearity from artificially inflating the Random Forest model's variance.
+5.	Temporal and Geographic Trends 
+Visualizations detailing these trends are provided in the appendix/dashboard. Broader business trends were visualized, indicating that Maharashtra drives the highest volume of orders by a significant margin. Additionally, a temporal analysis revealed a sharp decline in total sales revenue moving from April into June 2022, signaling potential seasonal shifts or platform-wide issues that warrant future business investigation.
+6.	Feature Selection and Refinement 
+Based on the insights derived from the EDA, a rigorous feature selection process was applied to prevent data leakage and multicollinearity. The promotion feature was excluded due to target leakage, and ship_service_level was dropped due to perfect collinearity with fulfillment methods. Furthermore, Qty was removed as its near-zero variance provided negligible predictive value.
+The first of many iterations achieved very high score:
+ 
+However, upon deploying and actual testing. The model performed with extreme probabilities. Using SHAP and FEATURE IMPORTANCES – we uncovered the imbalance of the dataset is caused by the promotion.
+ 
+Upon various pandas queries, we concluded the data is skewed or misgathered since the beginning. The key findings are:
+Orders fullfilled by merchant with no promotion takes 5.39% of the dataset, with an overwhelming 99.42% cancellation rate. On the other hand, those fufilled by Amazon with promotion have a stark contrast of 0.63% cancellation rate. Furthermore, despite having 61.73% of orders have promotion ids, only 3.09% accounted for cancelled. A likely hypothesis is that customers returned the item after trying it on – the promotion_id was used, for the orders that cancelled before deliveries, the system did not keep track of the promotion ids. 
+We concluded that the promotion column has potential for data leakage, therefore did not make it in the final training of the model.
+The model was trained on 5 features: Amount, fulfillment_binary, B2B_binary, category, and size_ordinal.
+The final score being:  With the Feature importances as follow:
+Amount: 0.343264
+Fulfillment_binary: 0.325385
+Category: 0.140645
+Size_ordinal: 0.124861
+B2B: 0.065845
+
+We believe once the business is expanding, the B2B feature will hold more value and worth keeping. 
+
+
     
     Your rules:
-    - Answer questions strictly related to this e-commerce data, Random Forest models, data cleaning (like One-Hot Encoding), and Exploratory Data Analysis.
+    - Answer questions strictly based on the KNOWLEDGE BASE provided above. 
+    - Answer questions related to this e-commerce data, Random Forest models, data cleaning, and Exploratory Data Analysis.
     - If a user asks about unrelated topics (e.g., coding help, general history, weather), politely decline and state that you can only answer questions about the order cancellation project.
     - Keep answers concise, professional, and educational.
-    - For now the content of the project is empty, so you can only tell them to wait for more information to be added.
+    - If user asked for charts and specific score, tell them what you know if there is something missing, ask them to go to the EDA tab.
     """
     
     # Initialize the model with the system instructions
