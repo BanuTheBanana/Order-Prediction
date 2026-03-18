@@ -960,49 +960,65 @@ elif active_page == "📊 Data Exploration":
 # TAB 3: PROJECT ASSISTANT (CHATBOT)
 # ----------------------------------------------------------------------
 elif active_page == "💬 Project Assistant":
-    st.markdown("<h2 style='text-align: center; color: #8E24AA;'>💬 Trợ Lý AI Nội Bộ</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #666; font-size: 1.1rem;'>Hỏi đáp trực tiếp với trợ lý ảo về chi tiết dự án, Machine Learning, hay Data Cleaning.</p>", unsafe_allow_html=True)
-    st.divider()
+    st.header("💬 Project Assistant")
+    st.write("Ask me anything about the data preparation, model training, or insights from this project!")
     
-    # Chia layout để phần chat ko bị tràn viền quá rộng
-    _, chat_col, _ = st.columns([1, 4, 1])
+    # 1. Securely configure the Gemini API key
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     
-    with chat_col:
-        st.info("🤖 **Gợi ý câu hỏi:** *'Mô hình hoạt động như thế nào?'* hoặc *'Data Dictionary của dữ liệu này gồm gì?'*")
+    # 2. Define the bot's persona and rules
+    project_rules = """
+    You are an AI assistant for a data science project created by a second-year Artificial Intelligence student at FPT University. 
+    The project predicts e-commerce order cancellation probabilities using a Random Forest model. 
+    The dataset features include order amount, customer tenure, discount application, shipping method, payment type, and item count.
+    
+    Your rules:
+    - Answer questions strictly related to this e-commerce data, Random Forest models, data cleaning (like One-Hot Encoding), and Exploratory Data Analysis.
+    - If a user asks about unrelated topics (e.g., coding help, general history, weather), politely decline and state that you can only answer questions about the order cancellation project.
+    - Keep answers concise, professional, and educational.
+    - For now the content of the project is empty, so you can only tell them to wait for more information to be added.
+    """
+    
+    # Initialize the model with the system instructions
+    model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=project_rules)
+    
+    # 3. Initialize chat memory in Streamlit's session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+        
+        # Add a friendly greeting from the bot
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": "Hello! I am the AI assistant for this e-commerce prediction project. What would you like to know about this project?"
+        })
 
-        with st.container(border=True, height=450):
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-                st.session_state.messages.append({"role": "assistant", "content": "👋 Xin chào! Tôi là AI Assistant của dự án (sinh viên AI năm 2 ĐH FPT). Tôi có thể giúp gì cho bạn về mô hình phân tích hủy đơn hàng?"})
+    # 4. Display the chat history on the screen
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
+    # 5. Handle new user input
+    prompt = st.chat_input("Ask about the model or data...")
+    if prompt:
+        
+        # Display the user's message immediately
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        # Add user message to memory
+        st.session_state.messages.append({"role": "user", "content": prompt})
 
-        user_input = st.chat_input("Gõ câu hỏi của bạn tại đây...")
-        if user_input:
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            with st.spinner("Đang suy luận với Gemini..."):
-                try:
-                    # send full conversation for context
-                    assistant_response = ask_gemini_chat(
-                        user_prompt=user_input,
-                        conversation=st.session_state.messages,
-                        model=os.getenv("GEMINI_MODEL", "gemini-1.5-turbo"),
-                    )
-                    st.session_state.messages.append({"role": "assistant", "content": assistant_response})
-                except Exception as e:
-                    st.session_state.messages.append(
-                        {
-                            "role": "assistant",
-                            "content": (
-                                "⚠️ Lỗi khi gọi Gemini API: "
-                                + str(e)
-                                + "\n\nKiểm tra GEMINI_API_KEY hoặc st.secrets['gemini_api_key'] và kết nối mạng."
-                            ),
-                        }
-                    )
-            st.rerun()
+        # Generate the bot's response
+        with st.chat_message("assistant"):
+            # We need to pass the previous messages to Gemini so it has context
+            # We convert Streamlit's dictionary format into a string format Gemini easily reads
+            chat_history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+            
+            response = model.generate_content(chat_history)
+            st.markdown(response.text)
+            
+        # Add bot's response to memory
+        st.session_state.messages.append({"role": "assistant", "content": response.text})
 
 # ----------------------------------------------------------------------
 # TAB 4: BROWSE SẢN PHẨM (CLOTHING)
