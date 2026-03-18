@@ -17,7 +17,7 @@ st.set_page_config(page_title="Amazon Predictor", layout="wide")
 @st.cache_resource
 def load_model():
     # Điền đúng tên file joblib đã lưu cùng thư mục với script này
-    return joblib.load("model/LG_model.joblib")
+    return joblib.load("LG_model.joblib")
 try:
     model = load_model()
 except Exception as e:
@@ -135,6 +135,76 @@ def apply_auto_features(row: dict, df_columns: list[str]) -> dict:
         row["ship_premium"] = int(row.get("fulfillment_binary") or 0)
 
     return row
+
+
+def get_gemini_api_key() -> str | None:
+    # Prioritize env var then Streamlit secrets
+    key = os.getenv("GEMINI_API_KEY")
+    if key:
+        return key.strip()
+    try:
+        key = st.secrets.get("gemini_api_key")
+    except Exception:
+        key = None
+    if key:
+        return str(key).strip()
+    return None
+
+
+def ask_gemini_chat(user_prompt: str, conversation: list[dict[str, str]] | None = None, model: str = "gemini-1.5-turbo") -> str:
+    import json
+    import requests
+
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise ValueError("Gemini API key is not configured. Set GEMINI_API_KEY environment variable or st.secrets['gemini_api_key'].")
+
+    if conversation is None:
+        conversation = [
+            {"role": "system", "content": "You are a helpful project assistant for an Amazon sales prediction dashboard. Answer concisely in Vietnamese when user asks in Vietnamese."}
+        ]
+    else:
+        # include system intro in thread
+        if not any(m["role"] == "system" for m in conversation):
+            conversation = [
+                {"role": "system", "content": "You are a helpful project assistant for an Amazon sales prediction dashboard. Answer concisely in Vietnamese when user asks in Vietnamese."}
+            ] + conversation
+
+    messages_payload = []
+    for m in conversation:
+        if m["role"] in {"system", "user", "assistant"}:
+            if isinstance(m["content"], str):
+                messages_payload.append({"role": m["role"], "content": {"text": m["content"]}})
+
+    body = {
+        "messages": messages_payload,
+        "temperature": 0.2,
+        "maxOutputTokens": 512,
+    }
+
+    url = f"https://gemini.googleapis.com/v1/models/{model}:generateMessage"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    resp = requests.post(url, headers=headers, json=body, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini API failed ({resp.status_code}): {resp.text}")
+    data = resp.json()
+    # Gemini returns candidates list
+    candidates = data.get("candidates") or []
+    if not candidates:
+        # fallback for responses in message
+        message_obj = data.get("message") or {}
+        if isinstance(message_obj, dict):
+            content = message_obj.get("content") or {}
+            if isinstance(content, dict):
+                return content.get("text", "[Không có phản hồi]")
+        raise RuntimeError("Gemini API response has no candidates")
+    first = candidates[0]
+    if isinstance(first.get("content"), dict):
+        return first["content"].get("text", "[Không có phản hồi]")
+    return first.get("content", "[Không có phản hồi]")
 
 
 SIZE_ORDER = ["Free", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL", "6XL"]
@@ -909,17 +979,30 @@ elif active_page == "💬 Project Assistant":
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
-        if prompt := st.chat_input("Gõ câu hỏi của bạn tại đây..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
+        user_input = st.chat_input("Gõ câu hỏi của bạn tại đây...")
+        if user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.spinner("Đang suy luận với Gemini..."):
+                try:
+                    # send full conversation for context
+                    assistant_response = ask_gemini_chat(
+                        user_prompt=user_input,
+                        conversation=st.session_state.messages,
+                        model=os.getenv("GEMINI_MODEL", "gemini-1.5-turbo"),
+                    )
+                    st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+                except Exception as e:
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "⚠️ Lỗi khi gọi Gemini API: "
+                                + str(e)
+                                + "\n\nKiểm tra GEMINI_API_KEY hoặc st.secrets['gemini_api_key'] và kết nối mạng."
+                            ),
+                        }
+                    )
             st.rerun()
-
-        if len(st.session_state.messages) > 0 and st.session_state.messages[-1]["role"] == "user":
-            with st.spinner("Đang suy luận..."):
-                import time
-                time.sleep(1)
-                mock_response = "Giao diện Chatbot hiện chưa được tích hợp LLM. Vui lòng kết nối API (như OpenAI) để trợ lý này có thể trò chuyện thật."
-                st.session_state.messages.append({"role": "assistant", "content": mock_response})
-                st.rerun()
 
 # ----------------------------------------------------------------------
 # TAB 4: BROWSE SẢN PHẨM (CLOTHING)
