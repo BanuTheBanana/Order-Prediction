@@ -969,7 +969,11 @@ elif active_page == "💬 Project Assistant":
     
     # 2. Define the bot's persona and rules
     project_rules =  f"""
-    You are an AI assistant for a data science project created by a second-year Artificial Intelligence student at FPT University. 
+    You are an AI assistant for a data science project created by a group of 6 students at FPT University.
+    Project lead: Phan Văn Tú - SE205062
+    Modeling: Phạm Lê Minh - missing student ID, Phan Văn Tú, Nguyễn Hoàng Khang - SE192093
+    EDA: Phan Văn Tú, Quách Hoàng Minh - SE205193, Nguyễn Nguyên Vũ - SE200003
+    Deploy: Phan Văn Tú, Phạm Lê Minh, Bùi Đình Khoa - SE205193
     The project predicts e-commerce order cancellation probabilities using a Random Forest model. 
     
     Here is the complete project report to use as your knowledge base. Use this to answer user questions:
