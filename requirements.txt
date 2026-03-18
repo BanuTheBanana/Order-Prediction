@@ -7,3 +7,4 @@ scikit-learn==1.4.2
 sqlalchemy==2.0.43
 psycopg2-binary==2.9.10
 matplotlib==3.10.8
+google-generativeai==0.8.4
