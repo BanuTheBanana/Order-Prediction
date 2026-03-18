@@ -974,7 +974,8 @@ elif active_page == "💬 Project Assistant":
     Modeling: Phạm Lê Minh - missing student ID, Phan Văn Tú, Nguyễn Hoàng Khang - SE192093
     EDA: Phan Văn Tú, Quách Hoàng Minh - SE205193, Nguyễn Nguyên Vũ - SE200003
     Deploy: Phan Văn Tú, Phạm Lê Minh, Bùi Đình Khoa - SE205193
-    The project predicts e-commerce order cancellation probabilities using a Random Forest model. 
+    The project predicts e-commerce order cancellation probabilities using a LightGBM model. 
+    Contact info: phanvantu712@gmail.com
     
     Here is the complete project report to use as your knowledge base. Use this to answer user questions:
     
