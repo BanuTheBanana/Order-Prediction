@@ -1391,6 +1391,7 @@ elif active_page == "💬 Project Assistant":
     
     KNOWLEDGE BASE:
     DAP391m – REPORT CARD
+DAP391m – REPORT CARD
 
 I.	INTRODUCTION
 UNDERSTANDING THE E-COMMERCE BUSINESS
@@ -1449,7 +1450,8 @@ By applying K-Means clustering (optimized at k=3 using the Elbow Method) and per
 During manual data exploration, perfect collinearity was discovered between the fulfilled_by and ship_service_level columns. When an order is fulfilled by a Merchant, the service level is always labeled "Easy Ship," whereas Amazon fulfillments yield null values in that specific column. Recognizing this redundancy allowed for better feature selection, preventing multicollinearity from artificially inflating the Random Forest model's variance.
 5.	Temporal and Geographic Trends 
 Visualizations detailing these trends are provided in the appendix/dashboard. Broader business trends were visualized, indicating that Maharashtra drives the highest volume of orders by a significant margin. Additionally, a temporal analysis revealed a sharp decline in total sales revenue moving from April into June 2022, signaling potential seasonal shifts or platform-wide issues that warrant future business investigation.
-6.	Feature Selection and Refinement 
+
+IV.	FEATURE ENGINEERING AND REFINEMENT
 Based on the insights derived from the EDA, a rigorous feature selection process was applied to prevent data leakage and multicollinearity. The promotion feature was excluded due to target leakage, and ship_service_level was dropped due to perfect collinearity with fulfillment methods. Furthermore, Qty was removed as its near-zero variance provided negligible predictive value.
 The first of many iterations achieved very high score:
  
@@ -1467,14 +1469,15 @@ Size_ordinal: 0.124861
 B2B: 0.065845
 
 We believe once the business is expanding, the B2B feature will hold more value and worth keeping. 
+V. APPLICATION & AI-POWERED SOLUTIONS
+1. Predictive Prototype Deployment (Streamlit) 
+To bridge the gap between analytical modeling and business utility, the finalized model was integrated into an interactive web application built with Streamlit. The application interface allows business users (such as logistics managers or marketing teams) to input new order parameters—specifically the order amount, fulfillment type, B2B status, and item size.
+The application utilizes the trained model to process these inputs and outputs a real-time cancellation probability. To ensure operational safety and prevent the model from extrapolating wildly on unseen financial outliers, input guardrails were implemented on the order amount fields. Based on the predicted probability, the application categorizes the order into actionable risk tiers (e.g., "High Risk - High chance of cancellation", "Moderate Risk"), enabling immediate, proactive business interventions.
+2. Chatbot Integration for Decision Support To further assist users in navigating the project's findings, a conversational AI assistant was developed and integrated directly into the Streamlit interface. Powered by the Gemini 2.5 Flash API, the chatbot serves as an interactive knowledge base for the project.
+The chatbot's system instructions are engineered via prompt-tuning to strictly constrain its persona and knowledge scope. The entirety of this project's analytical report was systematically injected into the model's system prompt. Consequently, the assistant acts as a domain expert, capable of answering targeted user queries regarding the dataset, explaining the logic behind specific data preprocessing steps (such as the removal of the promotional data leak), and summarizing the Exploratory Data Analysis. Strict guardrails were placed in the prompt to prevent hallucination and restrict the bot from answering out-of-scope, non-project-related inquiries.
 
+	
 
-    
-    Your rules:
-    - Answer questions strictly based on the KNOWLEDGE BASE provided above. 
-    - Answer questions related to this e-commerce data, Random Forest models, data cleaning, and Exploratory Data Analysis.
-    - If a user asks about unrelated topics (e.g., coding help, general history, weather), politely decline and state that you can only answer questions about the order cancellation project.
-    - Keep answers concise, professional, and educational.
     - If user asked for charts and specific score, tell them what you know if there is something missing, ask them to go to the EDA tab.
     """
     
