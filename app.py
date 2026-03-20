@@ -82,7 +82,7 @@ DATA_CSV_PATH = Path("data") / "ecommerce_orders.csv"
 
 DATABASE_URI = os.environ.get(
     "DATABASE_URI",
-    "postgresql://neondb_owner:npg_Oj2irQBMP0Xw@ep-restless-mouse-a1l98lhe-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+    "postgresql://neondb_owner:npg_EVi6tsAX5zTy@ep-billowing-bread-a1mjush3-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
 )
 
 
@@ -98,7 +98,7 @@ def get_db_engine(uri: str):
 @st.cache_data(show_spinner=False)
 def load_orders_db(uri: str, refresh_token: int) -> pd.DataFrame:
     engine = get_db_engine(uri)
-    df = pd.read_sql_table("ecommerce_orders", con=engine)
+    df = pd.read_sql_table("ecommerce_data", con=engine)
     if "Unnamed: 22" in df.columns:
         df = df.drop(columns=["Unnamed: 22"])
     return df
