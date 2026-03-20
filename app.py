@@ -388,7 +388,7 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str,
             # Build row dynamically to avoid feature mismatch between model versions
             row: dict[str, object] = {}
             put("qty", "Qty", int(quantity))
-            put("amount", "Amount", float(amount))
+            put("amount", "Amount", float(amount)*int(quantity))
             put("fulfillment_binary", "fulfillment_binary", int(fulfillment_binary))
             put("b2b_binary", "B2B_binary", int(B2B_binary))
             put("size_ordinal", "size_ordinal", int(size_ordinal))
@@ -419,7 +419,7 @@ def run_prediction_ui(*, amount: float, locked_amount: bool, widget_prefix: str,
                     success_prob = float(model.predict_proba(input_data)[0][1])
                     success_prob_pct = success_prob * 100
 
-                    if success_prob < 0.65:
+                    if success_prob < 0.5:
                         risk_text = "Khả năng thành công thấp. Cần cân nhắc/kiểm tra thêm điều kiện đơn hàng. Gửi mail confirm đơn hàng + mã giảm giá cho khách."
                         delta_text = "Thấp"
                         delta_color = "inverse"
@@ -1903,3 +1903,4 @@ elif active_page == "🛍️ Browser Sản Phẩm":
                         st.rerun()
 
         st.caption("Bấm “Xem dự đoán” để tự chuyển sang tab 🎯 Dự đoán sản phẩm.")
+
